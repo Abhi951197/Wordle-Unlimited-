@@ -64,7 +64,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const API_URL = 'http://localhost:8000';
+  const API_URL = 'https://wordle-unlimited-6sjv.onrender.com';
 
   // ── Persist / load stats ────────────────────────────────────────────────────
   useEffect(() => {

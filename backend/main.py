@@ -69,6 +69,17 @@ class RoomInputRequest(BaseModel):
     player_id: str
     current_guess: str
 
+class ActiveBoardRequest(BaseModel):
+    player_id: str
+    board: str
+
+class ShareRequestCreate(BaseModel):
+    player_id: str
+
+class ShareRequestRespond(BaseModel):
+    player_id: str
+    accept: bool
+
 class LiveKitInfo(BaseModel):
     configured: bool
     url: str | None = None
@@ -78,6 +89,23 @@ class RoomPlayer(BaseModel):
     player_id: str
     player_name: str
     joined_at: str
+
+class BoardState(BaseModel):
+    session_id: str
+    difficulty: str
+    length: int
+    guesses: list[str]
+    results: list[list[str]]
+    current_guess: str = ""
+    game_over: bool
+    won: bool
+    answer: str | None = None
+
+class ShareRequestState(BaseModel):
+    from_player_id: str
+    from_player_name: str
+    session_id: str
+    created_at: str
 
 class RoomStateResponse(BaseModel):
     room_id: str
@@ -92,6 +120,11 @@ class RoomStateResponse(BaseModel):
     answer: str | None = None
     players: list[RoomPlayer]
     livekit: LiveKitInfo | None = None
+    host_player_id: str | None = None
+    active_board: str = "shared"
+    shared_board: BoardState | None = None
+    individual_board: BoardState | None = None
+    share_request: ShareRequestState | None = None
 
 class RoomJoinResponse(RoomStateResponse):
     player_id: str
@@ -134,6 +167,23 @@ def _create_session(difficulty: str) -> str:
     }
     return session_id
 
+def _board_state(session_id: str | None) -> BoardState | None:
+    if not session_id or session_id not in sessions:
+        return None
+
+    session = sessions[session_id]
+    return BoardState(
+        session_id=session_id,
+        difficulty=session["difficulty"],
+        length=len(session["word"]),
+        guesses=session["guesses"],
+        results=session["results"],
+        current_guess=session.get("current_guess", ""),
+        game_over=session["game_over"],
+        won=session["won"],
+        answer=session["word"] if session["game_over"] and not session["won"] else None,
+    )
+
 def _evaluate_guess(target_word: str, guess: str) -> list[str]:
     target_letters = list(target_word)
     guess_letters = list(guess)
@@ -169,14 +219,24 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         raise HTTPException(status_code=404, detail="Room not found")
 
     room = rooms[room_id]
-    session = sessions[room["session_id"]]
+    if player_id and player_id not in room["player_sessions"]:
+        room["player_sessions"][player_id] = _create_session(room.get("difficulty", "easy"))
+    active_board = room["player_active_boards"].get(player_id, "shared") if player_id else "shared"
+    shared_session_id = room.get("active_shared_session_id")
+    individual_session_id = room["player_sessions"].get(player_id) if player_id else None
+    active_session_id = (
+        individual_session_id
+        if active_board == "individual" and individual_session_id
+        else shared_session_id or individual_session_id
+    )
+    session = sessions[active_session_id]
     livekit = None
     if player_id and player_id in room["players"]:
         livekit = _livekit_token(room_id, player_id, room["players"][player_id]["player_name"])
 
     return RoomStateResponse(
         room_id=room_id,
-        session_id=room["session_id"],
+        session_id=active_session_id,
         difficulty=session["difficulty"],
         length=len(session["word"]),
         guesses=session["guesses"],
@@ -187,7 +247,28 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         answer=session["word"] if session["game_over"] and not session["won"] else None,
         players=list(room["players"].values()),
         livekit=livekit,
+        host_player_id=room.get("host_player_id"),
+        active_board=active_board,
+        shared_board=_board_state(shared_session_id),
+        individual_board=_board_state(individual_session_id),
+        share_request=room.get("share_request"),
     )
+
+def _require_room_player(room_id: str, player_id: str) -> dict[str, Any]:
+    if room_id not in rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if player_id not in rooms[room_id]["players"]:
+        raise HTTPException(status_code=403, detail="Player is not in this room")
+    return rooms[room_id]
+
+def _active_session_id(room: dict[str, Any], player_id: str) -> str:
+    if player_id not in room["player_sessions"]:
+        room["player_sessions"][player_id] = _create_session(room.get("difficulty", "easy"))
+
+    active_board = room["player_active_boards"].get(player_id, "shared")
+    if active_board == "individual":
+        return room["player_sessions"][player_id]
+    return room["active_shared_session_id"] or room["player_sessions"][player_id]
 
 def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     if session_id not in sessions:
@@ -238,10 +319,17 @@ def create_room(req: RoomCreateRequest):
     room_id = _room_code()
     player_id = req.player_id or str(uuid.uuid4())
     player_name = _clean_player_name(req.player_name)
-    session_id = _create_session(req.difficulty)
+    shared_session_id = _create_session(req.difficulty)
+    individual_session_id = _create_session(req.difficulty)
     rooms[room_id] = {
         "room_id": room_id,
-        "session_id": session_id,
+        "host_player_id": player_id,
+        "voice_room_id": room_id,
+        "difficulty": req.difficulty,
+        "active_shared_session_id": shared_session_id,
+        "player_sessions": {player_id: individual_session_id},
+        "player_active_boards": {player_id: "shared"},
+        "share_request": None,
         "created_at": _now_iso(),
         "players": {
             player_id: {
@@ -261,6 +349,9 @@ def join_room(room_id: str, req: RoomJoinRequest):
         raise HTTPException(status_code=404, detail="Room not found")
 
     player_id = req.player_id or str(uuid.uuid4())
+    if player_id not in rooms[room_id]["player_sessions"]:
+        rooms[room_id]["player_sessions"][player_id] = _create_session(rooms[room_id].get("difficulty", "easy"))
+    rooms[room_id]["player_active_boards"].setdefault(player_id, "shared")
     rooms[room_id]["players"][player_id] = {
         "player_id": player_id,
         "player_name": _clean_player_name(req.player_name),
@@ -276,29 +367,85 @@ def get_room_state(room_id: str, player_id: str | None = None):
 @app.post("/rooms/{room_id}/guess", response_model=RoomStateResponse)
 def submit_room_guess(room_id: str, req: RoomGuessRequest):
     room_id = room_id.strip().upper()
-    if room_id not in rooms:
-        raise HTTPException(status_code=404, detail="Room not found")
-    if req.player_id not in rooms[room_id]["players"]:
-        raise HTTPException(status_code=403, detail="Player is not in this room")
+    room = _require_room_player(room_id, req.player_id)
 
-    _submit_guess_to_session(rooms[room_id]["session_id"], req.guess)
+    _submit_guess_to_session(_active_session_id(room, req.player_id), req.guess)
     return _room_state(room_id, req.player_id)
 
 @app.post("/rooms/{room_id}/input", response_model=RoomStateResponse)
 def update_room_input(room_id: str, req: RoomInputRequest):
     room_id = room_id.strip().upper()
-    if room_id not in rooms:
-        raise HTTPException(status_code=404, detail="Room not found")
-    if req.player_id not in rooms[room_id]["players"]:
-        raise HTTPException(status_code=403, detail="Player is not in this room")
+    room = _require_room_player(room_id, req.player_id)
 
-    session = sessions[rooms[room_id]["session_id"]]
+    session = sessions[_active_session_id(room, req.player_id)]
     guess = req.current_guess.upper()
     if len(guess) > len(session["word"]) or (guess and not guess.isalpha()):
         raise HTTPException(status_code=400, detail="Invalid current guess")
 
     if not session.get("game_over"):
         session["current_guess"] = guess
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/shared-game", response_model=RoomStateResponse)
+def create_shared_game(room_id: str, req: PlayerRequest):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id or "")
+    difficulty = room.get("difficulty", "easy")
+    room["active_shared_session_id"] = _create_session(difficulty)
+    room["share_request"] = None
+    for player_id in room["players"]:
+        room["player_active_boards"][player_id] = "shared"
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/individual-game", response_model=RoomStateResponse)
+def create_individual_game(room_id: str, req: PlayerRequest):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id or "")
+    difficulty = room.get("difficulty", "easy")
+    room["player_sessions"][req.player_id] = _create_session(difficulty)
+    room["player_active_boards"][req.player_id] = "individual"
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/active-board", response_model=RoomStateResponse)
+def set_active_board(room_id: str, req: ActiveBoardRequest):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id)
+    if req.board not in {"shared", "individual"}:
+        raise HTTPException(status_code=400, detail="Board must be shared or individual")
+    if req.board == "shared" and not room.get("active_shared_session_id"):
+        room["active_shared_session_id"] = _create_session(room.get("difficulty", "easy"))
+    if req.board == "individual" and req.player_id not in room["player_sessions"]:
+        room["player_sessions"][req.player_id] = _create_session(room.get("difficulty", "easy"))
+    room["player_active_boards"][req.player_id] = req.board
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/share-request", response_model=RoomStateResponse)
+def create_share_request(room_id: str, req: ShareRequestCreate):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id)
+    if req.player_id not in room["player_sessions"]:
+        room["player_sessions"][req.player_id] = _create_session(room.get("difficulty", "easy"))
+    room["share_request"] = ShareRequestState(
+        from_player_id=req.player_id,
+        from_player_name=room["players"][req.player_id]["player_name"],
+        session_id=room["player_sessions"][req.player_id],
+        created_at=_now_iso(),
+    )
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/share-request/respond", response_model=RoomStateResponse)
+def respond_share_request(room_id: str, req: ShareRequestRespond):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id)
+    share_request = room.get("share_request")
+    if not share_request:
+        return _room_state(room_id, req.player_id)
+
+    if req.accept:
+        room["active_shared_session_id"] = share_request.session_id
+        for player_id in room["players"]:
+            room["player_active_boards"][player_id] = "shared"
+    room["share_request"] = None
     return _room_state(room_id, req.player_id)
 
 from hints import WORD_HINTS

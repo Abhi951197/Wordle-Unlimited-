@@ -11,12 +11,13 @@ import {
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { useGameState } from '@/store/GameState';
+import { ActiveBoard, useGameState } from '@/store/GameState';
 
 const DIFF_META: Record<string, {
   color: string;
@@ -25,27 +26,27 @@ const DIFF_META: Record<string, {
   guesses: string;
 }> = {
   easy: {
-    color: '#6aaa64',
+    color: '#59c65f',
     label: 'Easy',
-    desc: 'No restrictions - classic Wordle',
+    desc: 'Classic Wordle rules',
     guesses: '6 guesses',
   },
   moderate: {
-    color: '#c9b458',
+    color: '#d6b849',
     label: 'Moderate',
-    desc: 'Must reuse confirmed letters in every guess',
+    desc: 'Reuse confirmed letters',
     guesses: '6 guesses',
   },
   difficult: {
-    color: '#e55c5c',
+    color: '#ef6461',
     label: 'Difficult',
-    desc: 'Moderate rules plus eliminated letters are banned',
+    desc: 'Confirmed letters plus bans',
     guesses: '6 guesses',
   },
   prodigy: {
-    color: '#9b59b6',
+    color: '#b268ff',
     label: 'Prodigy',
-    desc: 'Difficult rules plus only 4 chances',
+    desc: 'Hard rules, only 4 chances',
     guesses: '4 guesses',
   },
 };
@@ -55,8 +56,8 @@ const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info
   type,
 }) => {
   const bg =
-    type === 'error' ? '#1a1a1b' :
-    type === 'warning' ? '#8b6914' : '#538d4e';
+    type === 'error' ? '#ef6461' :
+    type === 'warning' ? '#d6b849' : '#2f8d46';
 
   return (
     <Animated.View
@@ -75,6 +76,11 @@ export default function GameScreen() {
     createRoom,
     joinRoom,
     leaveRoom,
+    createSharedGame,
+    createIndividualGame,
+    setActiveBoard,
+    requestShareBoard,
+    respondToShareRequest,
     gameStatus,
     currentGuess,
     addLetter,
@@ -87,9 +93,12 @@ export default function GameScreen() {
     sessionId,
     difficulty,
     roomId,
+    playerId,
     playerName,
     roomPlayers,
     livekit,
+    activeBoard,
+    shareRequest,
     stats,
     invalidShake,
     lastSubmittedRow,
@@ -98,9 +107,10 @@ export default function GameScreen() {
     toast,
   } = useGameState();
 
+  const { width } = useWindowDimensions();
+  const wide = width >= 960;
   const [diffModal, setDiffModal] = useState(false);
   const [statsModal, setStatsModal] = useState(false);
-  const [partyModal, setPartyModal] = useState(false);
   const [roomName, setRoomName] = useState(playerName);
   const [joinCode, setJoinCode] = useState('');
 
@@ -147,175 +157,247 @@ export default function GameScreen() {
     : '-';
   const maxDist = Math.max(...stats.guessDistribution, 1);
   const activeMeta = DIFF_META[difficulty] ?? DIFF_META.easy;
+  const shareFromMe = shareRequest?.from_player_id === playerId;
+  const hasShareForMe = !!shareRequest && !shareFromMe;
 
   if (!sessionId) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6aaa64" />
+        <ActivityIndicator size="large" color="#59c65f" />
         <Text style={styles.loadingText}>Connecting...</Text>
         <TouchableOpacity
-          style={[styles.pill, { backgroundColor: '#6aaa64', marginTop: 8 }]}
+          style={[styles.primaryBtn, { marginTop: 8 }]}
           onPress={() => startGame('easy')}
         >
-          <Text style={styles.pillTextWhite}>Retry</Text>
+          <Text style={styles.primaryBtnText}>Retry</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  const startDifficulty = (d: string) => {
+  const copyRoom = async () => {
+    if (!roomId || Platform.OS !== 'web' || typeof navigator === 'undefined') return;
+    await navigator.clipboard?.writeText(roomId);
+  };
+
+  const chooseDifficulty = (d: string) => {
     startGame(d);
     setDiffModal(false);
   };
 
+  const switchBoard = (board: ActiveBoard) => {
+    if (activeBoard !== board) setActiveBoard(board);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => setDiffModal(true)}
-          style={[styles.diffBadge, { borderColor: activeMeta.color }]}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.diffBadgeLabel, { color: activeMeta.color }]}>
-            {activeMeta.label}
-          </Text>
-        </TouchableOpacity>
+      <ScrollView
+        contentContainerStyle={[styles.shell, wide && styles.shellWide]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.heroPanel, wide && styles.heroPanelWide]}>
+          <Text style={styles.brand}>WORDLE</Text>
+          <Text style={styles.brandAccent}>UNLIMITED</Text>
+          <Text style={styles.heroCopy}>Play solo, together, or side by side while voice stays connected.</Text>
 
-        <Text style={styles.title}>WORLD UNLIMITED</Text>
-
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            onPress={() => setPartyModal(true)}
-            style={[styles.headerBtn, roomId && styles.headerBtnActive]}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.headerBtnText, roomId && styles.headerBtnTextActive]}>Party</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setStatsModal(true)}
-            style={styles.headerBtn}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.headerBtnText}>Stats</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      <View style={styles.headerLine} />
-
-      <View style={styles.toastSlot} pointerEvents="none">
-        {toast ? <ToastBanner message={toast.message} type={toast.type} /> : null}
-      </View>
-
-      {roomId && (
-        <View style={styles.roomBar}>
-          <View style={styles.roomBarText}>
-            <Text style={styles.roomLabel}>Room {roomId}</Text>
-            <Text style={styles.roomMeta}>
-              {roomPlayers.length} player{roomPlayers.length === 1 ? '' : 's'} connected
-            </Text>
+          <View style={styles.modeStack}>
+            <TouchableOpacity
+              style={[styles.modeButton, styles.modeTogether]}
+              onPress={() => roomId ? createSharedGame() : createRoom(difficulty, roomName)}
+              activeOpacity={0.78}
+            >
+              <Text style={styles.modeTitle}>Play Together</Text>
+              <Text style={styles.modeSub}>One shared board for everyone</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeButton, styles.modeSolo]}
+              onPress={() => roomId ? createIndividualGame() : startGame(difficulty)}
+              activeOpacity={0.78}
+            >
+              <Text style={styles.modeTitle}>Play Individually</Text>
+              <Text style={styles.modeSub}>Different boards, same room chat</Text>
+            </TouchableOpacity>
           </View>
-          <VoiceControls livekit={livekit} />
+
+          <TouchableOpacity
+            onPress={() => setDiffModal(true)}
+            style={[styles.diffBadge, { borderColor: activeMeta.color }]}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.diffBadgeLabel, { color: activeMeta.color }]}>
+              {activeMeta.label} - {activeMeta.guesses}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => setStatsModal(true)} style={styles.secondaryBtn}>
+            <Text style={styles.secondaryBtnText}>Stats</Text>
+          </TouchableOpacity>
         </View>
-      )}
 
-      <View style={styles.gridArea}>
-        <WordGrid
-          guesses={guesses}
-          results={results}
-          currentGuess={currentGuess}
-          wordLength={wordLength}
-          invalidShake={invalidShake}
-          lastSubmittedRow={lastSubmittedRow}
-          maxGuesses={maxGuesses}
-        />
-      </View>
+        <View style={styles.mainStage}>
+          <View style={styles.topBar}>
+            <View>
+              <Text style={styles.stageTitle}>WORLD UNLIMITED</Text>
+              <Text style={styles.stageMeta}>
+                {roomId
+                  ? `${activeBoard === 'shared' ? 'Shared board' : 'Individual board'} in room ${roomId}`
+                  : 'Solo mode'}
+              </Text>
+            </View>
+            {roomId && <VoiceControls livekit={livekit} compact />}
+          </View>
 
-      <Keyboard
-        onKeyPress={addLetter}
-        onEnter={submitGuess}
-        onDelete={removeLetter}
-        letterStates={letterStates}
-      />
+          {toast ? (
+            <View style={styles.toastSlot} pointerEvents="none">
+              <ToastBanner message={toast.message} type={toast.type} />
+            </View>
+          ) : <View style={styles.toastSlot} />}
 
-      <Modal visible={partyModal} transparent animationType="slide" onRequestClose={() => setPartyModal(false)}>
-        <TouchableWithoutFeedback onPress={() => setPartyModal(false)}>
-          <View style={styles.modalBackdrop} />
-        </TouchableWithoutFeedback>
-        <View style={styles.bottomSheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>Party Room</Text>
+          {roomId && (
+            <View style={styles.boardTabs}>
+              <TouchableOpacity
+                style={[styles.boardTab, activeBoard === 'shared' && styles.boardTabActive]}
+                onPress={() => switchBoard('shared')}
+              >
+                <Text style={[styles.boardTabText, activeBoard === 'shared' && styles.boardTabTextActive]}>
+                  Shared
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.boardTab, activeBoard === 'individual' && styles.boardTabActive]}
+                onPress={() => switchBoard('individual')}
+              >
+                <Text style={[styles.boardTabText, activeBoard === 'individual' && styles.boardTabTextActive]}>
+                  Individual
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {hasShareForMe && (
+            <View style={styles.sharePrompt}>
+              <Text style={styles.sharePromptText}>{shareRequest?.from_player_name} wants to share a board.</Text>
+              <View style={styles.promptActions}>
+                <TouchableOpacity style={styles.acceptBtn} onPress={() => respondToShareRequest(true)}>
+                  <Text style={styles.promptBtnText}>Accept</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.declineBtn} onPress={() => respondToShareRequest(false)}>
+                  <Text style={styles.promptBtnText}>Decline</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {shareFromMe && (
+            <View style={styles.sharePrompt}>
+              <Text style={styles.sharePromptText}>Share request sent. Waiting for a friend to accept.</Text>
+            </View>
+          )}
+
+          <View style={styles.gridArea}>
+            <WordGrid
+              guesses={guesses}
+              results={results}
+              currentGuess={currentGuess}
+              wordLength={wordLength}
+              invalidShake={invalidShake}
+              lastSubmittedRow={lastSubmittedRow}
+              maxGuesses={maxGuesses}
+            />
+          </View>
+
+          <Keyboard
+            onKeyPress={addLetter}
+            onEnter={submitGuess}
+            onDelete={removeLetter}
+            letterStates={letterStates}
+          />
+
+          {roomId && activeBoard === 'individual' && gameStatus === 'playing' && (
+            <TouchableOpacity style={styles.shareBoardBtn} onPress={requestShareBoard}>
+              <Text style={styles.primaryBtnText}>Share My Board</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={[styles.partyPanel, wide && styles.partyPanelWide]}>
+          <Text style={styles.panelTitle}>{roomId ? `Room ${roomId}` : 'Create Party'}</Text>
+          <Text style={styles.panelSub}>
+            {roomId ? `${roomPlayers.length} connected` : 'Invite friends and keep voice open'}
+          </Text>
 
           <TextInput
             value={roomName}
             onChangeText={setRoomName}
             placeholder="Your name"
-            style={styles.roomInput}
+            placeholderTextColor="#667085"
+            style={styles.darkInput}
             autoCapitalize="words"
             autoCorrect={false}
           />
 
           {roomId ? (
-            <View style={styles.roomPanel}>
-              <Text style={styles.roomCode}>{roomId}</Text>
-              <Text style={styles.roomHelp}>Share this code with friends so they can join.</Text>
+            <>
+              <View style={styles.roomCodeRow}>
+                <Text style={styles.roomCode}>{roomId}</Text>
+                <TouchableOpacity style={styles.smallBtn} onPress={copyRoom}>
+                  <Text style={styles.smallBtnText}>Copy</Text>
+                </TouchableOpacity>
+              </View>
+
               <View style={styles.playerList}>
                 {roomPlayers.map(player => (
-                  <Text key={player.player_id} style={styles.playerChip}>
-                    {player.player_name}
-                  </Text>
+                  <View key={player.player_id} style={styles.playerRow}>
+                    <View style={styles.avatarDot} />
+                    <Text style={styles.playerName}>
+                      {player.player_name}{player.player_id === playerId ? ' (You)' : ''}
+                    </Text>
+                    <View style={styles.onlineDot} />
+                  </View>
                 ))}
               </View>
+
               <VoiceControls livekit={livekit} />
-              <TouchableOpacity
-                style={[styles.roomActionBtn, styles.leaveRoomBtn]}
-                onPress={() => {
-                  leaveRoom();
-                  setPartyModal(false);
-                }}
-                activeOpacity={0.75}
-              >
-                <Text style={styles.roomActionText}>Leave Room</Text>
+
+              <TouchableOpacity style={styles.secondaryBtn} onPress={createSharedGame}>
+                <Text style={styles.secondaryBtnText}>Start Shared Board</Text>
               </TouchableOpacity>
-            </View>
+              <TouchableOpacity style={styles.secondaryBtn} onPress={createIndividualGame}>
+                <Text style={styles.secondaryBtnText}>Play Individually</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.leaveBtn} onPress={leaveRoom}>
+                <Text style={styles.leaveBtnText}>Leave Room</Text>
+              </TouchableOpacity>
+            </>
           ) : (
             <>
               <TouchableOpacity
-                style={styles.roomActionBtn}
-                onPress={() => {
-                  createRoom(difficulty, roomName);
-                  setPartyModal(false);
-                }}
-                activeOpacity={0.75}
+                style={styles.primaryBtn}
+                onPress={() => createRoom(difficulty, roomName)}
+                activeOpacity={0.8}
               >
-                <Text style={styles.roomActionText}>Create Room</Text>
+                <Text style={styles.primaryBtnText}>Create Party</Text>
               </TouchableOpacity>
-
               <View style={styles.joinRow}>
                 <TextInput
                   value={joinCode}
                   onChangeText={value => setJoinCode(value.toUpperCase())}
                   placeholder="Room code"
-                  style={[styles.roomInput, styles.joinInput]}
+                  placeholderTextColor="#667085"
+                  style={[styles.darkInput, styles.joinInput]}
                   autoCapitalize="characters"
                   autoCorrect={false}
                   maxLength={6}
                 />
-                <TouchableOpacity
-                  style={[styles.roomActionBtn, styles.joinBtn]}
-                  onPress={() => {
-                    joinRoom(joinCode, roomName);
-                    setPartyModal(false);
-                  }}
-                  activeOpacity={0.75}
-                >
-                  <Text style={styles.roomActionText}>Join</Text>
+                <TouchableOpacity style={styles.joinBtn} onPress={() => joinRoom(joinCode, roomName)}>
+                  <Text style={styles.primaryBtnText}>Join</Text>
                 </TouchableOpacity>
               </View>
             </>
           )}
-          <View style={{ height: 20 }} />
         </View>
-      </Modal>
+      </ScrollView>
 
       <Modal visible={diffModal} transparent animationType="slide" onRequestClose={() => setDiffModal(false)}>
         <TouchableWithoutFeedback onPress={() => setDiffModal(false)}>
@@ -324,14 +406,13 @@ export default function GameScreen() {
         <View style={styles.bottomSheet}>
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>Choose Difficulty</Text>
-
           {Object.entries(DIFF_META).map(([d, m]) => {
             const active = difficulty === d;
             return (
               <TouchableOpacity
                 key={d}
-                onPress={() => startDifficulty(d)}
-                style={[styles.diffOption, active && { borderColor: m.color, backgroundColor: `${m.color}18` }]}
+                onPress={() => chooseDifficulty(d)}
+                style={[styles.diffOption, active && { borderColor: m.color, backgroundColor: '#16231b' }]}
                 activeOpacity={0.75}
               >
                 <View style={styles.diffOptionText}>
@@ -341,22 +422,18 @@ export default function GameScreen() {
                   </View>
                   <Text style={styles.diffOptionDesc}>{m.desc}</Text>
                 </View>
-                {active && <Text style={[styles.diffOptionCheck, { color: m.color }]}>OK</Text>}
               </TouchableOpacity>
             );
           })}
-          <View style={{ height: 20 }} />
         </View>
       </Modal>
 
       <Modal visible={statsModal} transparent animationType="slide" onRequestClose={() => setStatsModal(false)}>
         <View style={styles.statsModalContainer}>
           <View style={styles.statsSheet}>
-            <View style={styles.sheetHandle} />
             <TouchableOpacity style={styles.closeBtn} onPress={() => setStatsModal(false)}>
               <Text style={styles.closeBtnText}>X</Text>
             </TouchableOpacity>
-
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.sheetTitle}>Statistics</Text>
               <StatsSummary
@@ -367,7 +444,6 @@ export default function GameScreen() {
                 gameStatus={gameStatus}
                 guesses={guesses}
               />
-              <View style={{ height: 24 }} />
             </ScrollView>
           </View>
         </View>
@@ -375,39 +451,31 @@ export default function GameScreen() {
 
       {gameStatus !== 'playing' && (
         <View style={styles.overlay}>
-          <ScrollView contentContainerStyle={styles.overlayCard} showsVerticalScrollIndicator={false}>
+          <View style={styles.overlayCard}>
             <Text style={[styles.resultTitle, gameStatus === 'won' ? styles.wonColor : styles.lostColor]}>
               {gameStatus === 'won' ? 'You Won!' : 'Game Over'}
             </Text>
-
             {gameStatus === 'lost' && answer && (
               <View style={styles.answerBadge}>
                 <Text style={styles.answerLabel}>The word was</Text>
                 <Text style={styles.answerWord}>{answer}</Text>
               </View>
             )}
-
-            <StatsSummary
-              stats={stats}
-              winPct={winPct}
-              avgGuesses={avgGuesses}
-              maxDist={maxDist}
-              gameStatus={gameStatus}
-              guesses={guesses}
-            />
-
-            <TouchableOpacity
-              style={[styles.playAgainBtn, { backgroundColor: activeMeta.color }]}
-              onPress={() => roomId ? createRoom(difficulty, playerName) : startGame(difficulty)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.playAgainText}>Play Again</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={() => setDiffModal(true)} style={{ marginTop: 12 }}>
-              <Text style={styles.changeDiffText}>Change difficulty</Text>
-            </TouchableOpacity>
-          </ScrollView>
+            {roomId ? (
+              <>
+                <TouchableOpacity style={styles.primaryBtn} onPress={createSharedGame}>
+                  <Text style={styles.primaryBtnText}>Continue Together</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.secondaryBtn} onPress={createIndividualGame}>
+                  <Text style={styles.secondaryBtnText}>Play Individually</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity style={styles.primaryBtn} onPress={() => startGame(difficulty)}>
+                <Text style={styles.primaryBtnText}>Play Again</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       )}
     </SafeAreaView>
@@ -436,11 +504,9 @@ const StatsSummary: React.FC<{
         </View>
       ))}
     </View>
-
     <Text style={styles.avgLine}>
       Avg guesses per win: <Text style={{ fontWeight: '800' }}>{avgGuesses}</Text>
     </Text>
-
     <Text style={styles.distTitle}>Guess Distribution</Text>
     {stats.guessDistribution.map((count: number, idx: number) => {
       const pct = Math.max((count / maxDist) * 100, 5);
@@ -452,7 +518,7 @@ const StatsSummary: React.FC<{
             style={[
               styles.distBar,
               { width: `${pct}%` },
-              isLast ? { backgroundColor: '#6aaa64' } : { backgroundColor: '#787c7e' },
+              isLast ? { backgroundColor: '#59c65f' } : { backgroundColor: '#667085' },
             ]}
           >
             <Text style={styles.distCount}>{count}</Text>
@@ -466,86 +532,124 @@ const StatsSummary: React.FC<{
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
-    alignItems: 'center',
+    backgroundColor: '#061017',
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f9f9f9',
+    backgroundColor: '#061017',
     gap: 10,
   },
-  loadingText: { fontSize: 14, color: '#787c7e' },
-  header: {
-    width: '100%',
+  loadingText: { fontSize: 14, color: '#9aa4b2' },
+  shell: {
+    padding: 14,
+    gap: 12,
+  },
+  shellWide: {
+    minHeight: '100%',
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'android' ? 14 : 8,
-    paddingBottom: 8,
+    alignItems: 'stretch',
   },
-  headerLine: {
-    width: '100%',
-    height: 1,
-    backgroundColor: '#d3d6da',
-    marginBottom: 4,
+  heroPanel: {
+    borderWidth: 1,
+    borderColor: '#243241',
+    borderRadius: 8,
+    backgroundColor: '#091720',
+    padding: 18,
+    gap: 14,
   },
-  title: {
-    fontSize: 18,
+  heroPanelWide: {
+    width: 250,
+  },
+  brand: {
+    color: '#f8fafc',
+    fontSize: 32,
     fontWeight: '900',
-    letterSpacing: 3,
-    color: '#1a1a1b',
-    textAlign: 'center',
-    flex: 1,
+    letterSpacing: 0,
+  },
+  brandAccent: {
+    color: '#59c65f',
+    fontSize: 24,
+    fontWeight: '900',
+    marginTop: -12,
+  },
+  heroCopy: {
+    color: '#d5dde7',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  modeStack: {
+    gap: 10,
+  },
+  modeButton: {
+    borderRadius: 8,
+    padding: 14,
+    borderWidth: 1,
+  },
+  modeTogether: {
+    backgroundColor: '#281946',
+    borderColor: '#7c3aed',
+  },
+  modeSolo: {
+    backgroundColor: '#08243a',
+    borderColor: '#2380c9',
+  },
+  modeTitle: {
+    color: '#f8fafc',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  modeSub: {
+    color: '#cdd6e1',
+    fontSize: 12,
+    marginTop: 5,
+    lineHeight: 16,
   },
   diffBadge: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 7,
+    paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    backgroundColor: '#fff',
-    minWidth: 84,
+    borderRadius: 6,
+    borderWidth: 1,
+    backgroundColor: '#0d1720',
   },
-  diffBadgeLabel: { fontSize: 12, fontWeight: '800' },
-  headerActions: {
+  diffBadgeLabel: { fontSize: 12, fontWeight: '900' },
+  mainStage: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: '#243241',
+    borderRadius: 8,
+    backgroundColor: '#07131b',
+    padding: 14,
+    alignItems: 'center',
+  },
+  topBar: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    minWidth: 156,
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 8,
   },
-  headerBtn: {
+  stageTitle: {
+    color: '#f8fafc',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 3,
+  },
+  stageMeta: {
+    color: '#9aa4b2',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  toastSlot: {
     height: 34,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#d3d6da',
-    backgroundColor: '#fff',
-  },
-  headerBtnActive: {
-    borderColor: '#6aaa64',
-    backgroundColor: '#eef7ee',
-  },
-  headerBtnText: {
-    color: '#565758',
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  headerBtnTextActive: {
-    color: '#538d4e',
-  },
-  toastSlot: {
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 2,
   },
   toast: {
     paddingHorizontal: 18,
@@ -554,135 +658,250 @@ const styles = StyleSheet.create({
   },
   toastText: {
     color: '#fff',
-    fontWeight: '700',
+    fontWeight: '800',
     fontSize: 13,
-    letterSpacing: 0.3,
   },
-  roomBar: {
-    width: '92%',
-    maxWidth: 520,
+  boardTabs: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#d3d6da',
-    backgroundColor: '#fff',
-    marginBottom: 6,
+    borderColor: '#243241',
+    borderRadius: 7,
+    overflow: 'hidden',
+    marginBottom: 8,
   },
-  roomBarText: { flex: 1 },
-  roomLabel: {
-    color: '#1a1a1b',
-    fontSize: 13,
+  boardTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 24,
+    backgroundColor: '#0d1720',
+  },
+  boardTabActive: {
+    backgroundColor: '#2f8d46',
+  },
+  boardTabText: {
+    color: '#9aa4b2',
     fontWeight: '900',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+    fontSize: 12,
   },
-  roomMeta: {
-    color: '#787c7e',
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  roomInput: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: '#d3d6da',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    color: '#1a1a1b',
-    backgroundColor: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  roomActionBtn: {
-    minHeight: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 6,
-    backgroundColor: '#6aaa64',
-    paddingHorizontal: 16,
-  },
-  roomActionText: {
+  boardTabTextActive: {
     color: '#fff',
+  },
+  sharePrompt: {
+    width: '100%',
+    maxWidth: 560,
+    borderWidth: 1,
+    borderColor: '#d6b849',
+    backgroundColor: '#211b0b',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+    gap: 8,
+  },
+  sharePromptText: {
+    color: '#f7e6a1',
     fontSize: 13,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  joinRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 10,
-  },
-  joinInput: {
-    flex: 1,
-    marginBottom: 0,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  joinBtn: { minWidth: 84 },
-  roomPanel: { gap: 10 },
-  roomCode: {
-    color: '#1a1a1b',
-    fontSize: 32,
-    fontWeight: '900',
-    letterSpacing: 5,
-    textAlign: 'center',
-  },
-  roomHelp: {
-    color: '#787c7e',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  playerList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    justifyContent: 'center',
-  },
-  playerChip: {
-    color: '#1a1a1b',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    fontSize: 12,
     fontWeight: '800',
   },
-  leaveRoomBtn: { backgroundColor: '#e55c5c' },
+  promptActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  acceptBtn: {
+    backgroundColor: '#2f8d46',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  declineBtn: {
+    backgroundColor: '#4a5565',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  promptBtnText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 12,
+  },
   gridArea: {
     flex: 1,
+    minHeight: 310,
     justifyContent: 'center',
     alignItems: 'center',
     width: '100%',
   },
+  shareBoardBtn: {
+    marginTop: 12,
+    backgroundColor: '#2380c9',
+    borderRadius: 7,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+  },
+  partyPanel: {
+    borderWidth: 1,
+    borderColor: '#243241',
+    borderRadius: 8,
+    backgroundColor: '#091720',
+    padding: 16,
+    gap: 12,
+  },
+  partyPanelWide: {
+    width: 280,
+  },
+  panelTitle: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  panelSub: {
+    color: '#9aa4b2',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: -8,
+  },
+  darkInput: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderColor: '#243241',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    color: '#f8fafc',
+    backgroundColor: '#061017',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  primaryBtn: {
+    minHeight: 42,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 7,
+    backgroundColor: '#2f8d46',
+    paddingHorizontal: 16,
+  },
+  primaryBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  secondaryBtn: {
+    minHeight: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 7,
+    backgroundColor: '#0d1720',
+    borderWidth: 1,
+    borderColor: '#243241',
+    paddingHorizontal: 14,
+  },
+  secondaryBtnText: {
+    color: '#d5dde7',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  roomCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  roomCode: {
+    flex: 1,
+    color: '#f8fafc',
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 4,
+  },
+  smallBtn: {
+    backgroundColor: '#111820',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  smallBtnText: {
+    color: '#f8fafc',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  playerList: {
+    gap: 8,
+  },
+  playerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  avatarDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#2380c9',
+  },
+  playerName: {
+    flex: 1,
+    color: '#d5dde7',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  onlineDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#59c65f',
+  },
+  leaveBtn: {
+    minHeight: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#ef6461',
+    backgroundColor: '#170e10',
+  },
+  leaveBtnText: {
+    color: '#ef6461',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  joinRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  joinInput: {
+    flex: 1,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  joinBtn: {
+    minHeight: 42,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 7,
+    backgroundColor: '#2380c9',
+    paddingHorizontal: 16,
+  },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   bottomSheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: '#091720',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     paddingHorizontal: 20,
     paddingTop: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 12,
+    paddingBottom: 24,
+    borderWidth: 1,
+    borderColor: '#243241',
   },
   sheetHandle: {
     width: 40,
     height: 4,
-    backgroundColor: '#d3d6da',
+    backgroundColor: '#334155',
     borderRadius: 2,
     alignSelf: 'center',
     marginBottom: 14,
@@ -692,7 +911,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.5,
     textTransform: 'uppercase',
-    color: '#1a1a1b',
+    color: '#f8fafc',
     marginBottom: 16,
     textAlign: 'center',
   },
@@ -700,12 +919,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 14,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#e8e8e8',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#243241',
     marginBottom: 10,
-    backgroundColor: '#fff',
-    gap: 12,
+    backgroundColor: '#061017',
   },
   diffOptionText: { flex: 1 },
   diffOptionRow: {
@@ -714,41 +932,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 3,
   },
-  diffOptionLabel: { fontSize: 15, fontWeight: '800', color: '#1a1a1b' },
-  diffOptionGuesses: { fontSize: 11, fontWeight: '600', color: '#787c7e' },
-  diffOptionDesc: { fontSize: 12, color: '#565758', lineHeight: 17 },
-  diffOptionCheck: { fontSize: 12, fontWeight: '900' },
+  diffOptionLabel: { fontSize: 15, fontWeight: '900', color: '#f8fafc' },
+  diffOptionGuesses: { fontSize: 11, fontWeight: '700', color: '#9aa4b2' },
+  diffOptionDesc: { fontSize: 12, color: '#9aa4b2', lineHeight: 17 },
   statsModalContainer: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   statsSheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: '#091720',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     paddingHorizontal: 24,
-    paddingTop: 12,
+    paddingTop: 18,
+    paddingBottom: 28,
     maxHeight: '85%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 12,
+    borderWidth: 1,
+    borderColor: '#243241',
   },
   closeBtn: {
     position: 'absolute',
-    top: 16,
-    right: 20,
+    top: 14,
+    right: 18,
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#111820',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
   },
-  closeBtnText: { fontSize: 13, fontWeight: '800', color: '#565758' },
+  closeBtnText: { fontSize: 13, fontWeight: '900', color: '#d5dde7' },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
@@ -757,22 +972,20 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   statBox: { alignItems: 'center', minWidth: 60 },
-  statValue: { fontSize: 28, fontWeight: '900', color: '#1a1a1b' },
+  statValue: { fontSize: 28, fontWeight: '900', color: '#f8fafc' },
   statLabel: {
     fontSize: 10,
-    color: '#787c7e',
+    color: '#9aa4b2',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
     marginTop: 2,
     textAlign: 'center',
   },
-  avgLine: { fontSize: 12, color: '#787c7e', marginBottom: 16, textAlign: 'center' },
+  avgLine: { fontSize: 12, color: '#9aa4b2', marginBottom: 16, textAlign: 'center' },
   distTitle: {
     fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.2,
+    fontWeight: '900',
     textTransform: 'uppercase',
-    color: '#1a1a1b',
+    color: '#f8fafc',
     marginBottom: 8,
   },
   distRow: {
@@ -781,7 +994,7 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     gap: 7,
   },
-  distNum: { width: 18, textAlign: 'right', fontWeight: '700', fontSize: 13, color: '#1a1a1b' },
+  distNum: { width: 18, textAlign: 'right', fontWeight: '800', fontSize: 13, color: '#f8fafc' },
   distBar: {
     paddingRight: 8,
     paddingLeft: 6,
@@ -791,54 +1004,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minWidth: 24,
   },
-  distCount: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  distCount: { color: '#fff', fontWeight: '800', fontSize: 12 },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(249,249,249,0.97)',
+    backgroundColor: 'rgba(6,16,23,0.94)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 20,
+    padding: 18,
   },
   overlayCard: {
     alignItems: 'center',
-    paddingHorizontal: 28,
-    paddingVertical: 24,
+    padding: 24,
     width: '100%',
     maxWidth: 420,
+    borderWidth: 1,
+    borderColor: '#243241',
+    borderRadius: 8,
+    backgroundColor: '#091720',
+    gap: 12,
   },
-  resultTitle: { fontSize: 28, fontWeight: '900', letterSpacing: 1, marginBottom: 14 },
-  wonColor: { color: '#6aaa64' },
-  lostColor: { color: '#e55c5c' },
+  resultTitle: { fontSize: 28, fontWeight: '900', letterSpacing: 1, marginBottom: 2 },
+  wonColor: { color: '#59c65f' },
+  lostColor: { color: '#ef6461' },
   answerBadge: {
     alignItems: 'center',
-    marginBottom: 20,
-    backgroundColor: '#fff3cd',
-    borderRadius: 10,
+    marginBottom: 8,
+    backgroundColor: '#211b0b',
+    borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 24,
     borderWidth: 1,
-    borderColor: '#f0c040',
+    borderColor: '#d6b849',
   },
   answerLabel: {
     fontSize: 11,
-    color: '#7a6020',
+    color: '#f7e6a1',
     textTransform: 'uppercase',
-    letterSpacing: 1,
     marginBottom: 4,
   },
-  answerWord: { fontSize: 28, fontWeight: '900', letterSpacing: 7, color: '#1a1a1b' },
-  playAgainBtn: {
-    marginTop: 22,
-    paddingVertical: 13,
-    paddingHorizontal: 56,
-    borderRadius: 10,
-  },
-  playAgainText: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 1 },
-  changeDiffText: { fontSize: 13, color: '#787c7e', textDecorationLine: 'underline' },
-  pill: {
-    paddingVertical: 9,
-    paddingHorizontal: 24,
-    borderRadius: 20,
-  },
-  pillTextWhite: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  answerWord: { fontSize: 28, fontWeight: '900', letterSpacing: 7, color: '#f8fafc' },
 });

@@ -69,6 +69,10 @@ class RoomInputRequest(BaseModel):
     player_id: str
     current_guess: str
 
+class RoomDifficultyRequest(BaseModel):
+    player_id: str
+    difficulty: str
+
 class ActiveBoardRequest(BaseModel):
     player_id: str
     board: str
@@ -404,6 +408,19 @@ def create_individual_game(room_id: str, req: PlayerRequest):
     difficulty = room.get("difficulty", "easy")
     room["player_sessions"][req.player_id] = _create_session(difficulty)
     room["player_active_boards"][req.player_id] = "individual"
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/difficulty", response_model=RoomStateResponse)
+def change_room_difficulty(room_id: str, req: RoomDifficultyRequest):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id)
+    difficulty = req.difficulty.strip().lower()
+    room["difficulty"] = difficulty
+    room["active_shared_session_id"] = _create_session(difficulty)
+    room["share_request"] = None
+    for player_id in room["players"]:
+        room["player_sessions"][player_id] = _create_session(difficulty)
+        room["player_active_boards"][player_id] = "shared"
     return _room_state(room_id, req.player_id)
 
 @app.post("/rooms/{room_id}/active-board", response_model=RoomStateResponse)

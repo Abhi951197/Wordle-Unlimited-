@@ -72,6 +72,7 @@ interface GameStateContextType {
   leaveRoom: () => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
+  changeRoomDifficulty: (difficulty: string) => Promise<void>;
   setActiveBoard: (board: ActiveBoard) => Promise<void>;
   requestShareBoard: () => Promise<void>;
   respondToShareRequest: (accept: boolean) => Promise<void>;
@@ -394,6 +395,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     await postRoomAction('individual-game', {});
   };
 
+  const changeRoomDifficulty = async (nextDifficulty: string) => {
+    await postRoomAction('difficulty', { difficulty: nextDifficulty });
+  };
+
   const setActiveBoard = async (board: ActiveBoard) => {
     await postRoomAction('active-board', { board });
   };
@@ -610,7 +615,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       roomPlayers, livekit, activeBoard, sharedBoard, individualBoard, shareRequest,
       guesses, results, currentGuess, gameStatus, letterStates, stats,
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
-      setActiveBoard, requestShareBoard, respondToShareRequest, addLetter, removeLetter,
+      changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
       answer, maxGuesses, toast,
     }}>

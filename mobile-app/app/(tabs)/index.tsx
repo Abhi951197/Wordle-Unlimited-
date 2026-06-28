@@ -38,7 +38,7 @@ const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info
 
 export default function GameScreen() {
   const {
-    startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
+    startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerName, roomPlayers, livekit, activeBoard,
@@ -135,10 +135,20 @@ export default function GameScreen() {
     if (activeBoard !== board) setActiveBoard(board);
   };
 
+  const changeDifficulty = async (nextDifficulty: string) => {
+    setDiffModal(false);
+    if (roomId) {
+      await changeRoomDifficulty(nextDifficulty);
+      setView('party');
+      return;
+    }
+    await startGame(nextDifficulty);
+  };
+
   const renderHeader = (subtitle: string, showVoice = false) => (
     <View style={styles.header}>
       <TouchableOpacity style={styles.iconBtn} onPress={() => setView('home')}>
-        <Text style={styles.iconText}>‹</Text>
+        <Text style={styles.iconText}>{'<'}</Text>
       </TouchableOpacity>
       <View style={styles.headerTitleBlock}>
         <Text style={styles.headerTitle}>WORDLE UNLIMITED</Text>
@@ -150,6 +160,9 @@ export default function GameScreen() {
             <Text style={styles.iconText}>i</Text>
           </TouchableOpacity>
         )}
+        <TouchableOpacity style={[styles.iconBtn, styles.diffIconBtn]} onPress={() => setDiffModal(true)}>
+          <Text style={[styles.iconText, { color: activeMeta.color }]}>{activeMeta.label[0]}</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.iconBtn} onPress={() => setHelpModal(true)}>
           <Text style={styles.iconText}>?</Text>
         </TouchableOpacity>
@@ -236,7 +249,7 @@ export default function GameScreen() {
 
       {view === 'party' && (
         <View style={styles.gameScreen}>
-          {renderHeader(roomId ? `Room ${roomId} · ${roomPlayers.length} online` : 'Party mode', !!roomId)}
+          {renderHeader(roomId ? `Room ${roomId} - ${roomPlayers.length} online - ${activeMeta.label}` : 'Party mode', !!roomId)}
           {!roomId ? (
             <View style={styles.partySetup}>
               <Text style={styles.sectionTitle}>Start a Party</Text>
@@ -257,16 +270,7 @@ export default function GameScreen() {
                 <TouchableOpacity style={styles.joinBtn} onPress={joinParty}><Text style={styles.primaryText}>Join</Text></TouchableOpacity>
               </View>
             </View>
-          ) : (
-            <>
-              <View style={styles.partyTopBar}>
-                <TouchableOpacity style={styles.chipBtn} onPress={createSharedGame}><Text style={styles.chipText}>Together</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.chipBtn} onPress={createIndividualGame}><Text style={styles.chipText}>Individual</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.chipBtn} onPress={() => setRoomModal(true)}><Text style={styles.chipText}>Room</Text></TouchableOpacity>
-              </View>
-              {renderBoard()}
-            </>
-          )}
+          ) : renderBoard()}
         </View>
       )}
 
@@ -279,12 +283,11 @@ export default function GameScreen() {
               key={d}
               style={[styles.sheetRow, difficulty === d && { borderColor: m.color }]}
               onPress={() => {
-                startGame(d);
-                setDiffModal(false);
+                changeDifficulty(d);
               }}
             >
               <Text style={[styles.sheetRowTitle, difficulty === d && { color: m.color }]}>{m.label}</Text>
-              <Text style={styles.sheetRowMeta}>{m.desc} · {m.guesses}</Text>
+              <Text style={styles.sheetRowMeta}>{m.desc} - {m.guesses}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -398,14 +401,15 @@ const styles = StyleSheet.create({
   footerIcon: { width: 46, height: 46, borderRadius: 14, borderWidth: 1, borderColor: '#2a3544', backgroundColor: '#141a22', alignItems: 'center', justifyContent: 'center' },
   footerIconText: { color: '#fff', fontSize: 18, fontWeight: '900' },
   gameScreen: { flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10 },
-  header: { minHeight: 82, justifyContent: 'center' },
+  header: { minHeight: 92, justifyContent: 'center' },
   iconBtn: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#2a3544', backgroundColor: '#141a22', alignItems: 'center', justifyContent: 'center' },
+  diffIconBtn: { borderColor: '#3b4652' },
   iconText: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  headerTitleBlock: { position: 'absolute', left: 48, right: 88, top: 15 },
-  headerTitle: { color: '#fff', fontSize: 15, fontWeight: '900', letterSpacing: 1.4 },
+  headerTitleBlock: { position: 'absolute', left: 48, right: 138, top: 15 },
+  headerTitle: { color: '#fff', fontSize: 14, fontWeight: '900', letterSpacing: 1.2 },
   headerSubtitle: { color: '#a7b0be', fontSize: 12, fontWeight: '700', marginTop: 3 },
   headerActions: { position: 'absolute', right: 0, top: 12, flexDirection: 'row', gap: 8 },
-  voiceDock: { marginTop: 10, paddingLeft: 48 },
+  voiceDock: { marginTop: 12, paddingLeft: 48, paddingRight: 2 },
   boardShell: { flex: 1, alignItems: 'center', justifyContent: 'space-between', minHeight: 0 },
   toastSlot: { height: 32, justifyContent: 'center' },
   toast: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 12 },
@@ -415,7 +419,7 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: '#4caf50' },
   segmentText: { color: '#a7b0be', fontSize: 12, fontWeight: '900' },
   segmentTextActive: { color: '#fff' },
-  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 300 },
+  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 250 },
   prompt: { width: '100%', borderRadius: 14, borderWidth: 1, borderColor: '#f59e0b', backgroundColor: '#261b05', padding: 10, marginBottom: 6 },
   promptText: { color: '#ffd88a', fontWeight: '800', fontSize: 13 },
   promptRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
@@ -434,9 +438,6 @@ const styles = StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 4 },
   line: { flex: 1, height: 1, backgroundColor: '#2a3544' },
   dividerText: { color: '#6b7280', fontWeight: '900', textTransform: 'uppercase', fontSize: 11 },
-  partyTopBar: { flexDirection: 'row', gap: 8, marginBottom: 4 },
-  chipBtn: { flex: 1, minHeight: 38, borderRadius: 13, backgroundColor: '#141a22', borderWidth: 1, borderColor: '#2a3544', alignItems: 'center', justifyContent: 'center' },
-  chipText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
   sheet: { backgroundColor: '#141a22', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, borderWidth: 1, borderColor: '#2a3544', gap: 12 },
   sheetTitle: { color: '#fff', fontSize: 20, fontWeight: '900', marginBottom: 4 },
@@ -472,3 +473,5 @@ const styles = StyleSheet.create({
   distBar: { height: 22, minWidth: 24, borderRadius: 5, backgroundColor: '#3b4652', alignItems: 'flex-end', justifyContent: 'center', paddingHorizontal: 7 },
   distCount: { color: '#fff', fontWeight: '900', fontSize: 12 },
 });
+
+

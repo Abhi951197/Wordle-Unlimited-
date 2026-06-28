@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 
 interface KeyboardProps {
   onKeyPress: (key: string) => void;
@@ -33,8 +33,15 @@ const KEY_TEXT: Record<string, string> = {
 export const Keyboard: React.FC<KeyboardProps> = ({
   onKeyPress, onEnter, onDelete, letterStates,
 }) => {
+  const { width, height } = useWindowDimensions();
+  const keyboardWidth = Math.min(width - 28, 390);
+  const keyGap = 4;
+  const normalKeyWidth = Math.max(25, Math.floor((keyboardWidth - keyGap * 9) / 10));
+  const keyHeight = Math.max(40, Math.min(48, Math.floor(height * 0.058)));
+  const wideKeyWidth = Math.max(50, Math.floor(normalKeyWidth * 1.75));
+
   return (
-    <View style={styles.keyboard}>
+    <View style={[styles.keyboard, { maxWidth: keyboardWidth }]}>
       {ROWS.map((row, rowIndex) => (
         <View key={rowIndex} style={styles.row}>
           {row.map((key) => {
@@ -50,7 +57,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
                 activeOpacity={isBanned ? 1 : 0.68}
                 style={[
                   styles.key,
-                  (isEnter || isDel) && styles.wideKey,
+                  { width: isEnter || isDel ? wideKeyWidth : normalKeyWidth, height: keyHeight },
                   { backgroundColor: KEY_BG[state] ?? KEY_BG.empty },
                   isBanned && styles.bannedKey,
                 ]}
@@ -93,18 +100,12 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   key: {
-    height: 48,
-    minWidth: 29,
     paddingHorizontal: 4,
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 7,
     borderWidth: 1,
     borderColor: '#2a3544',
-  },
-  wideKey: {
-    minWidth: 55,
-    paddingHorizontal: 6,
   },
   bannedKey: {
     opacity: 0.45,

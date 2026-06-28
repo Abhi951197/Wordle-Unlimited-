@@ -22,13 +22,15 @@ const IS_WEB = Platform.OS === 'web';
 // ── Cell sizes ───────────────────────────────────────────────────────────────
 const CELL_GAP        = 6;
 const GRID_H_PADDING  = 24;   // total left+right padding
-const MAX_CELL_SIZE   = 58;
-const MIN_CELL_SIZE   = 38;
+const MAX_CELL_SIZE   = 54;
+const MIN_CELL_SIZE   = 32;
 
 function useCellSize(wordLength: number) {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const available = width - GRID_H_PADDING * 2 - CELL_GAP * (wordLength - 1);
-  return Math.max(MIN_CELL_SIZE, Math.min(MAX_CELL_SIZE, Math.floor(available / wordLength)));
+  const byWidth = Math.floor(available / wordLength);
+  const byHeight = Math.floor((height * 0.47 - CELL_GAP * (VISUAL_ROWS - 1)) / VISUAL_ROWS);
+  return Math.max(MIN_CELL_SIZE, Math.min(MAX_CELL_SIZE, byWidth, byHeight));
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

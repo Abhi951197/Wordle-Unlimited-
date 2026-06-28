@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, StyleSheet, useWindowDimensions } from 'react-native';
+import { Platform, View, StyleSheet, useWindowDimensions } from 'react-native';
 import Animated, {
   useSharedValue, useAnimatedStyle,
   withTiming, withDelay, withSequence,
@@ -17,6 +17,7 @@ const COLORS = {
 
 // Always render this many rows so the grid height never jumps between difficulties
 const VISUAL_ROWS = 6;
+const IS_WEB = Platform.OS === 'web';
 
 // ── Cell sizes ───────────────────────────────────────────────────────────────
 const CELL_GAP        = 5;
@@ -111,7 +112,7 @@ const Cell: React.FC<CellProps> = ({
       transform: [
         { translateX: shakeX.value },
         { scale: scale.value },
-        { rotateY: `${rotateY.value}deg` },
+        { rotateY: IS_WEB ? '0deg' : `${rotateY.value}deg` },
       ],
       backgroundColor: flipped ? col.bg     : COLORS.empty.bg,
       borderColor:     flipped ? col.border  : (letter ? COLORS.filledBorder : COLORS.empty.border),
@@ -122,7 +123,7 @@ const Cell: React.FC<CellProps> = ({
     'worklet';
     const flipped = rotateY.value > 90 || (isPastRow && !isJustSubmitted);
     return {
-      transform: [{ rotateY: flipped ? '180deg' : '0deg' }],
+      transform: [{ rotateY: IS_WEB ? '0deg' : (flipped ? '180deg' : '0deg') }],
       color:     flipped ? '#ffffff' : '#1a1a1b',
     };
   });

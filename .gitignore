@@ -1,0 +1,16 @@
+# Python
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+
+# Node / Expo
+mobile-app/node_modules/
+mobile-app/.expo/
+mobile-app/dist/
+
+# Misc
+.DS_Store
+*.log
+.claude/
+evaluator.md
+agent.md

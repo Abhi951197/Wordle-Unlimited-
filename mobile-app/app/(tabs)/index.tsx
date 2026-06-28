@@ -220,6 +220,27 @@ export default function GameScreen() {
             </TouchableOpacity>
           </View>
 
+          {!roomId && (
+            <View style={styles.quickJoinBox}>
+              <Text style={styles.quickJoinTitle}>Join Party</Text>
+              <View style={styles.joinRow}>
+                <TextInput
+                  value={joinCode}
+                  onChangeText={value => setJoinCode(value.toUpperCase())}
+                  placeholder="Room code"
+                  placeholderTextColor="#667085"
+                  style={[styles.darkInput, styles.joinInput]}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={6}
+                />
+                <TouchableOpacity style={styles.joinBtn} onPress={() => joinRoom(joinCode, roomName)}>
+                  <Text style={styles.primaryBtnText}>Join</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           <TouchableOpacity
             onPress={() => setDiffModal(true)}
             style={[styles.diffBadge, { borderColor: activeMeta.color }]}
@@ -605,6 +626,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 5,
     lineHeight: 16,
+  },
+  quickJoinBox: {
+    borderWidth: 1,
+    borderColor: '#243241',
+    borderRadius: 8,
+    backgroundColor: '#061017',
+    padding: 12,
+    gap: 8,
+  },
+  quickJoinTitle: {
+    color: '#f8fafc',
+    fontSize: 13,
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   diffBadge: {
     alignItems: 'center',

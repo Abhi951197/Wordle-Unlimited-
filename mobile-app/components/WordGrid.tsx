@@ -7,12 +7,12 @@ import Animated, {
 
 // ── Colour constants — plain JS objects, safe to use inside reanimated worklets ──
 const COLORS = {
-  correct:      { bg: '#6aaa64', border: '#6aaa64' },
-  present:      { bg: '#c9b458', border: '#c9b458' },
-  absent:       { bg: '#787c7e', border: '#787c7e' },
-  empty:        { bg: '#ffffff', border: '#d3d6da' },
-  locked:       { bg: '#f0f0f0', border: '#e0e0e0' }, // beyond maxGuesses on Prodigy
-  filledBorder: '#878a8c',
+  correct:      { bg: '#2f8d46', border: '#2f8d46' },
+  present:      { bg: '#d6a524', border: '#d6a524' },
+  absent:       { bg: '#3b4652', border: '#3b4652' },
+  empty:        { bg: '#0b1219', border: '#2a3544' },
+  locked:       { bg: '#111820', border: '#18212b' },
+  filledBorder: '#5a6573',
 } as const;
 
 // Always render this many rows so the grid height never jumps between difficulties
@@ -20,10 +20,10 @@ const VISUAL_ROWS = 6;
 const IS_WEB = Platform.OS === 'web';
 
 // ── Cell sizes ───────────────────────────────────────────────────────────────
-const CELL_GAP        = 5;
+const CELL_GAP        = 6;
 const GRID_H_PADDING  = 24;   // total left+right padding
-const MAX_CELL_SIZE   = 60;
-const MIN_CELL_SIZE   = 40;
+const MAX_CELL_SIZE   = 58;
+const MIN_CELL_SIZE   = 38;
 
 function useCellSize(wordLength: number) {
   const { width } = useWindowDimensions();
@@ -124,14 +124,14 @@ const Cell: React.FC<CellProps> = ({
     const flipped = rotateY.value > 90 || (isPastRow && !isJustSubmitted);
     return {
       transform: [{ rotateY: IS_WEB ? '0deg' : (flipped ? '180deg' : '0deg') }],
-      color:     flipped ? '#ffffff' : '#1a1a1b',
+      color:     flipped ? '#ffffff' : '#f8fafc',
     };
   });
 
   return (
     <Animated.View style={[
       styles.cell,
-      { width: size, height: size, borderRadius: size * 0.06 },
+      { width: size, height: size, borderRadius: 8 },
       cellStyle,
     ]}>
       <Animated.Text style={[styles.cellText, { fontSize: size * 0.5 }, textStyle]}>
@@ -191,7 +191,7 @@ const styles = StyleSheet.create({
   grid: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 4,
+    paddingVertical: 8,
   },
   row: {
     flexDirection: 'row',
@@ -200,6 +200,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
+    elevation: 2,
   },
   cellText: {
     fontWeight: '900',

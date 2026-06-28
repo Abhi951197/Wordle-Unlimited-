@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 interface KeyboardProps {
   onKeyPress: (key: string) => void;
@@ -11,25 +11,23 @@ interface KeyboardProps {
 const ROWS = [
   ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
   ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
-  ['ENTER', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '⌫'],
+  ['ENTER', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'DEL'],
 ];
 
-// Background colours per letter state
 const KEY_BG: Record<string, string> = {
-  correct: '#6aaa64',
-  present: '#c9b458',
-  absent:  '#787c7e',
-  banned:  '#3a3a3c',
-  empty:   '#d3d6da',
+  correct: '#2f8d46',
+  present: '#d6a524',
+  absent: '#3b4652',
+  banned: '#18212b',
+  empty: '#202a36',
 };
 
-// Text colour: white on all coloured states, dark on default grey
 const KEY_TEXT: Record<string, string> = {
   correct: '#ffffff',
   present: '#ffffff',
-  absent:  '#ffffff',
-  banned:  '#666666',
-  empty:   '#1a1a1b',
+  absent: '#ffffff',
+  banned: '#6b7280',
+  empty: '#f8fafc',
 };
 
 export const Keyboard: React.FC<KeyboardProps> = ({
@@ -40,16 +38,16 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       {ROWS.map((row, rowIndex) => (
         <View key={rowIndex} style={styles.row}>
           {row.map((key) => {
-            const isEnter  = key === 'ENTER';
-            const isDel    = key === '⌫';
-            const state    = (!isEnter && !isDel) ? (letterStates[key] ?? 'empty') : 'empty';
+            const isEnter = key === 'ENTER';
+            const isDel = key === 'DEL';
+            const state = (!isEnter && !isDel) ? (letterStates[key] ?? 'empty') : 'empty';
             const isBanned = state === 'banned';
 
             return (
               <TouchableOpacity
                 key={key}
                 disabled={isBanned}
-                activeOpacity={isBanned ? 1 : 0.65}
+                activeOpacity={isBanned ? 1 : 0.68}
                 style={[
                   styles.key,
                   (isEnter || isDel) && styles.wideKey,
@@ -82,45 +80,42 @@ export const Keyboard: React.FC<KeyboardProps> = ({
 
 const styles = StyleSheet.create({
   keyboard: {
-    paddingHorizontal: 6,
-    paddingBottom: 8,
-    gap: 7,
-    alignItems: 'center',
     width: '100%',
+    maxWidth: 390,
+    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 4,
   },
   row: {
+    width: '100%',
     flexDirection: 'row',
-    gap: 5,
     justifyContent: 'center',
+    gap: 4,
   },
   key: {
-    height: 56,
-    minWidth: 33,
+    height: 48,
+    minWidth: 29,
     paddingHorizontal: 4,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 4,
-    // subtle shadow for depth
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 1,
-    elevation: 2,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#2a3544',
   },
   wideKey: {
-    minWidth: 52,
+    minWidth: 55,
     paddingHorizontal: 6,
   },
   bannedKey: {
     opacity: 0.45,
   },
   keyText: {
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   actionText: {
-    fontSize: 12,
-    fontWeight: '800',
+    fontSize: 11,
+    fontWeight: '900',
   },
 });

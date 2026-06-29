@@ -5,6 +5,7 @@ import {
   Platform,
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -66,6 +67,14 @@ export default function GameScreen() {
   }, [roomId]);
 
   useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const roomParam = new URLSearchParams(window.location.search).get('room');
+    if (!roomParam) return;
+    setJoinCode(roomParam.toUpperCase());
+    if (!roomId) setView('party');
+  }, [roomId]);
+
+  useEffect(() => {
     if (Platform.OS !== 'web') return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (view === 'home' || gameStatus !== 'playing') return;
@@ -106,9 +115,35 @@ export default function GameScreen() {
     );
   }
 
+  const getInviteLink = () => {
+    if (!roomId) return '';
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      return `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomId)}`;
+    }
+    return `Room code: ${roomId}`;
+  };
+
   const copyRoom = async () => {
-    if (!roomId || Platform.OS !== 'web' || typeof navigator === 'undefined') return;
-    await navigator.clipboard?.writeText(roomId);
+    if (!roomId) return;
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined') {
+      await navigator.clipboard?.writeText(getInviteLink());
+    }
+  };
+
+  const shareRoom = async () => {
+    if (!roomId) return;
+    const inviteLink = getInviteLink();
+    const message = `Join my Wordle Unlimited party room ${roomId}: ${inviteLink}`;
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined') {
+      const webNavigator = navigator as Navigator & { share?: (data: { title?: string; text?: string; url?: string }) => Promise<void> };
+      if (webNavigator.share) {
+        await webNavigator.share({ title: 'Wordle Unlimited Party', text: `Join room ${roomId}`, url: inviteLink });
+        return;
+      }
+      await navigator.clipboard?.writeText(message);
+      return;
+    }
+    await Share.share({ title: 'Wordle Unlimited Party', message });
   };
 
   const openSolo = async () => {
@@ -297,7 +332,13 @@ export default function GameScreen() {
         <TouchableWithoutFeedback onPress={() => setRoomModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
         <View style={styles.sheet}>
           <Text style={styles.sheetTitle}>Room {roomId}</Text>
-          <TouchableOpacity style={styles.copyRow} onPress={copyRoom}><Text style={styles.copyCode}>{roomId}</Text><Text style={styles.copyLabel}>Copy</Text></TouchableOpacity>
+          <View style={styles.inviteCard}>
+            <Text style={styles.copyCode}>{roomId}</Text>
+            <View style={styles.inviteActions}>
+              <TouchableOpacity style={styles.inviteBtn} onPress={copyRoom}><Text style={styles.copyLabel}>Copy Link</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.inviteBtn, styles.shareBtn]} onPress={shareRoom}><Text style={styles.shareLabel}>Share</Text></TouchableOpacity>
+            </View>
+          </View>
           <View style={styles.playerList}>
             {roomPlayers.map(player => (
               <View key={player.player_id} style={styles.playerRow}>
@@ -444,9 +485,13 @@ const styles = StyleSheet.create({
   sheetRow: { borderWidth: 1, borderColor: '#2a3544', borderRadius: 16, padding: 14, backgroundColor: '#1b2430' },
   sheetRowTitle: { color: '#fff', fontSize: 16, fontWeight: '900' },
   sheetRowMeta: { color: '#a7b0be', fontSize: 13, marginTop: 4 },
-  copyRow: { borderRadius: 16, backgroundColor: '#1b2430', borderWidth: 1, borderColor: '#2a3544', padding: 14, flexDirection: 'row', alignItems: 'center' },
-  copyCode: { flex: 1, color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: 4 },
+  inviteCard: { borderRadius: 16, backgroundColor: '#1b2430', borderWidth: 1, borderColor: '#2a3544', padding: 14, gap: 12 },
+  inviteActions: { flexDirection: 'row', gap: 10 },
+  inviteBtn: { flex: 1, minHeight: 42, borderRadius: 12, borderWidth: 1, borderColor: '#365244', backgroundColor: '#16271d', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  shareBtn: { borderColor: '#31557e', backgroundColor: '#10243a' },
+  copyCode: { color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: 4 },
   copyLabel: { color: '#4caf50', fontSize: 13, fontWeight: '900' },
+  shareLabel: { color: '#60a5fa', fontSize: 13, fontWeight: '900' },
   playerList: { gap: 8 },
   playerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 38 },
   avatarDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#8b5cf6' },

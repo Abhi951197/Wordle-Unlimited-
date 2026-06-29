@@ -11,34 +11,37 @@ interface KeyboardProps {
 const ROWS = [
   ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
   ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
-  ['ENTER', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'DEL'],
+  ['DEL', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'ENTER'],
 ];
 
 const KEY_BG: Record<string, string> = {
-  correct: '#2f8d46',
-  present: '#d6a524',
-  absent: '#3b4652',
-  banned: '#18212b',
-  empty: '#202a36',
+  correct: '#16a34a',
+  present: '#facc15',
+  absent: '#64748b',
+  banned: '#101820',
+  empty: '#233446',
 };
 
 const KEY_TEXT: Record<string, string> = {
   correct: '#ffffff',
-  present: '#ffffff',
+  present: '#111827',
   absent: '#ffffff',
-  banned: '#6b7280',
-  empty: '#f8fafc',
+  banned: '#475569',
+  empty: '#ffffff',
 };
 
 export const Keyboard: React.FC<KeyboardProps> = ({
   onKeyPress, onEnter, onDelete, letterStates,
 }) => {
   const { width, height } = useWindowDimensions();
-  const keyboardWidth = Math.min(width - 28, 390);
-  const keyGap = 4;
-  const normalKeyWidth = Math.max(25, Math.floor((keyboardWidth - keyGap * 9) / 10));
-  const keyHeight = Math.max(40, Math.min(48, Math.floor(height * 0.058)));
-  const wideKeyWidth = Math.max(50, Math.floor(normalKeyWidth * 1.75));
+  const keyboardWidth = Math.min(width - 16, 420);
+  const keyGap = 5;
+  const wideRatio = 1.65;
+  const rowOneFit = (keyboardWidth - keyGap * 9) / 10;
+  const actionRowFit = (keyboardWidth - keyGap * 8) / (7 + wideRatio * 2);
+  const normalKeyWidth = Math.max(27, Math.floor(Math.min(rowOneFit, actionRowFit)));
+  const keyHeight = Math.max(46, Math.min(58, Math.floor(height * 0.068)));
+  const wideKeyWidth = Math.max(58, Math.floor(normalKeyWidth * wideRatio));
 
   return (
     <View style={[styles.keyboard, { maxWidth: keyboardWidth }]}>
@@ -88,35 +91,35 @@ export const Keyboard: React.FC<KeyboardProps> = ({
 const styles = StyleSheet.create({
   keyboard: {
     width: '100%',
-    maxWidth: 390,
+    maxWidth: 420,
     alignItems: 'center',
-    gap: 6,
+    gap: 7,
     paddingBottom: 4,
   },
   row: {
     width: '100%',
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 4,
+    gap: 5,
   },
   key: {
     paddingHorizontal: 4,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 7,
+    borderRadius: 9,
     borderWidth: 1,
-    borderColor: '#2a3544',
+    borderColor: 'rgba(255,255,255,0.09)',
   },
   bannedKey: {
     opacity: 0.45,
   },
   keyText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '900',
     letterSpacing: 0,
   },
   actionText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '900',
   },
 });

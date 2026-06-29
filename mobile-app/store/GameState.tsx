@@ -7,6 +7,16 @@ interface Stats {
   currentStreak: number;
   maxStreak: number;
   guessDistribution: number[];
+  byDifficulty: Record<string, DifficultyStats>;
+}
+
+export interface DifficultyStats {
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  currentStreak: number;
+  maxStreak: number;
+  guessDistribution: number[];
 }
 
 export interface Toast {
@@ -24,6 +34,7 @@ export interface RoomPlayer {
   player_id: string;
   player_name: string;
   joined_at: string;
+  last_active_at?: string | null;
 }
 
 export interface BoardState {
@@ -36,6 +47,8 @@ export interface BoardState {
   game_over: boolean;
   won: boolean;
   answer?: string | null;
+  typing_player_id?: string | null;
+  typing_player_name?: string | null;
 }
 
 export interface ShareRequestState {
@@ -55,6 +68,8 @@ interface GameStateContextType {
   playerId: string | null;
   playerName: string;
   roomPlayers: RoomPlayer[];
+  maxRoomPlayers: number;
+  typingPlayerName: string | null;
   livekit: LiveKitSession | null;
   activeBoard: ActiveBoard;
   sharedBoard: BoardState | null;
@@ -67,8 +82,8 @@ interface GameStateContextType {
   letterStates: Record<string, 'correct' | 'present' | 'absent' | 'empty' | 'banned'>;
   stats: Stats;
   startGame: (difficulty: string) => Promise<void>;
-  createRoom: (difficulty: string, playerName: string) => Promise<void>;
-  joinRoom: (roomId: string, playerName: string) => Promise<void>;
+  createRoom: (difficulty: string, playerName: string) => Promise<boolean>;
+  joinRoom: (roomId: string, playerName: string) => Promise<boolean>;
   leaveRoom: () => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
@@ -95,6 +110,7 @@ const defaultStats: Stats = {
   currentStreak: 0,
   maxStreak: 0,
   guessDistribution: [0, 0, 0, 0, 0, 0],
+  byDifficulty: {},
 };
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
@@ -110,6 +126,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState('Player');
   const [roomPlayers, setRoomPlayers] = useState<RoomPlayer[]>([]);
+  const [maxRoomPlayers, setMaxRoomPlayers] = useState(8);
+  const [typingPlayerName, setTypingPlayerName] = useState<string | null>(null);
   const [livekit, setLivekit] = useState<LiveKitSession | null>(null);
   const [activeBoard, setActiveBoardState] = useState<ActiveBoard>('shared');
   const [sharedBoard, setSharedBoard] = useState<BoardState | null>(null);
@@ -145,7 +163,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   useEffect(() => {
     AsyncStorage.getItem('word_unlimited_stats').then(val => {
-      if (val) setStats(JSON.parse(val));
+      if (val) setStats(normalizeStats(JSON.parse(val)));
     });
   }, []);
 
@@ -179,9 +197,60 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   }, []);
 
+  const emptyDifficultyStats = (): DifficultyStats => ({
+    gamesPlayed: 0,
+    wins: 0,
+    losses: 0,
+    currentStreak: 0,
+    maxStreak: 0,
+    guessDistribution: [0, 0, 0, 0, 0, 0],
+  });
+
+  const normalizeStats = (raw: any): Stats => ({
+    gamesPlayed: raw?.gamesPlayed ?? 0,
+    wins: raw?.wins ?? 0,
+    currentStreak: raw?.currentStreak ?? 0,
+    maxStreak: raw?.maxStreak ?? 0,
+    guessDistribution: Array.isArray(raw?.guessDistribution) ? raw.guessDistribution : [0, 0, 0, 0, 0, 0],
+    byDifficulty: raw?.byDifficulty ?? {},
+  });
+
   const saveAndSetStats = async (s: Stats) => {
-    setStats(s);
-    await AsyncStorage.setItem('word_unlimited_stats', JSON.stringify(s));
+    const normalized = normalizeStats(s);
+    setStats(normalized);
+    await AsyncStorage.setItem('word_unlimited_stats', JSON.stringify(normalized));
+  };
+
+  const buildUpdatedStats = (didWin: boolean, guessCount: number) => {
+    const nextStats = normalizeStats(stats);
+    const diffStats = { ...emptyDifficultyStats(), ...(nextStats.byDifficulty[difficulty] ?? {}) };
+    const overallGuessDistribution = [...nextStats.guessDistribution];
+    const diffGuessDistribution = [...diffStats.guessDistribution];
+
+    nextStats.gamesPlayed += 1;
+    diffStats.gamesPlayed += 1;
+
+    if (didWin) {
+      overallGuessDistribution[guessCount - 1] = (overallGuessDistribution[guessCount - 1] ?? 0) + 1;
+      diffGuessDistribution[guessCount - 1] = (diffGuessDistribution[guessCount - 1] ?? 0) + 1;
+      const overallStreak = nextStats.currentStreak + 1;
+      const diffStreak = diffStats.currentStreak + 1;
+      nextStats.wins += 1;
+      nextStats.currentStreak = overallStreak;
+      nextStats.maxStreak = Math.max(nextStats.maxStreak, overallStreak);
+      diffStats.wins += 1;
+      diffStats.currentStreak = diffStreak;
+      diffStats.maxStreak = Math.max(diffStats.maxStreak, diffStreak);
+    } else {
+      nextStats.currentStreak = 0;
+      diffStats.currentStreak = 0;
+      diffStats.losses += 1;
+    }
+
+    nextStats.guessDistribution = overallGuessDistribution;
+    diffStats.guessDistribution = diffGuessDistribution;
+    nextStats.byDifficulty = { ...nextStats.byDifficulty, [difficulty]: diffStats };
+    return nextStats;
   };
 
   const showToast = (message: string, type: Toast['type'] = 'error') => {
@@ -204,6 +273,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setInvalidShake(0);
     setLastSubmittedRow(-1);
     setAnswer(null);
+    setTypingPlayerName(null);
     setToastState(null);
   };
 
@@ -255,11 +325,13 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     setRoomId(data.room_id);
     setRoomPlayers(data.players ?? []);
+    setMaxRoomPlayers(data.max_players ?? 8);
     setLivekit(data.livekit ?? null);
     setActiveBoardState(boardMode);
     setSharedBoard(nextShared);
     setIndividualBoard(nextIndividual);
     setShareRequest(data.share_request ?? null);
+    setTypingPlayerName(data.typing_player_id === playerId ? null : data.typing_player_name ?? null);
     applyBoard(active ?? {
       session_id: data.session_id,
       difficulty: data.difficulty,
@@ -289,6 +361,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setRoomId(null);
       setPlayerId(null);
       setRoomPlayers([]);
+      setMaxRoomPlayers(8);
+      setTypingPlayerName(null);
       setLivekit(null);
       setActiveBoardState('shared');
       setSharedBoard(null);
@@ -320,8 +394,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       resetBoardState();
       applyRoomState(data);
       showToast(`Room ${data.room_id} is ready`, 'info');
+      return true;
     } catch {
       showToast('Could not create room', 'error');
+      return false;
     }
   };
 
@@ -329,7 +405,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const normalizedCode = code.trim().toUpperCase();
     if (!normalizedCode) {
       showToast('Enter a room code', 'error');
-      return;
+      return false;
     }
 
     try {
@@ -340,7 +416,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       });
       if (res.status === 404) {
         showToast('Room not found', 'error');
-        return;
+        return false;
+      }
+      if (res.status === 409) {
+        showToast('Room is full', 'error');
+        return false;
       }
       if (!res.ok) throw new Error('Could not join room');
 
@@ -352,8 +432,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       resetBoardState();
       applyRoomState(data);
       showToast(`Joined room ${data.room_id}`, 'info');
+      return true;
     } catch {
       showToast('Could not join room', 'error');
+      return false;
     }
   };
 
@@ -361,6 +443,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setRoomId(null);
     setPlayerId(null);
     setRoomPlayers([]);
+    setMaxRoomPlayers(8);
+    setTypingPlayerName(null);
     setLivekit(null);
     setActiveBoardState('shared');
     setSharedBoard(null);
@@ -582,24 +666,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setTimeout(() => {
         if (data.won) {
           setGameStatus('won');
-          const newDists = [...stats.guessDistribution];
-          newDists[newGuesses.length - 1]++;
-          const streak = stats.currentStreak + 1;
-          saveAndSetStats({
-            gamesPlayed: stats.gamesPlayed + 1,
-            wins: stats.wins + 1,
-            currentStreak: streak,
-            maxStreak: Math.max(stats.maxStreak, streak),
-            guessDistribution: newDists,
-          });
+          saveAndSetStats(buildUpdatedStats(true, newGuesses.length));
         } else if (data.game_over) {
           setAnswer(data.answer);
           setGameStatus('lost');
-          saveAndSetStats({
-            ...stats,
-            gamesPlayed: stats.gamesPlayed + 1,
-            currentStreak: 0,
-          });
+          saveAndSetStats(buildUpdatedStats(false, newGuesses.length));
         }
       }, 1600);
     } catch {
@@ -612,7 +683,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   return (
     <GameStateContext.Provider value={{
       difficulty, wordLength, sessionId, roomId, playerId, playerName,
-      roomPlayers, livekit, activeBoard, sharedBoard, individualBoard, shareRequest,
+      roomPlayers, maxRoomPlayers, typingPlayerName, livekit, activeBoard, sharedBoard, individualBoard, shareRequest,
       guesses, results, currentGuess, gameStatus, letterStates, stats,
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, addLetter, removeLetter,

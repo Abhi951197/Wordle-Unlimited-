@@ -14,6 +14,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
@@ -29,6 +30,24 @@ const DIFF_META: Record<string, { color: string; label: string; desc: string; gu
 
 type AppView = 'splash' | 'mode' | 'difficulty' | 'party' | 'roomCreated' | 'solo';
 type PlayMode = 'solo' | 'party';
+type StatsTab = 'overall' | 'easy' | 'moderate' | 'difficult' | 'prodigy';
+
+interface RecentRoom {
+  roomId: string;
+  name: string;
+  joinedAt: string;
+}
+
+interface AppSettings {
+  sound: boolean;
+  vibration: boolean;
+  voiceChat: boolean;
+  defaultDifficulty: string;
+  theme: 'dark';
+}
+
+const RECENT_ROOMS_KEY = 'word_recent_rooms';
+const SETTINGS_KEY = 'word_app_settings';
 
 const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info' }> = ({ message, type }) => {
   const bg = type === 'error' ? '#EF4444' : type === 'warning' ? '#FACC15' : '#16C75A';
@@ -44,7 +63,7 @@ export default function GameScreen() {
     startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
-    sessionId, difficulty, roomId, playerId, roomPlayers, livekit, activeBoard,
+    sessionId, difficulty, roomId, playerId, roomPlayers, maxRoomPlayers, typingPlayerName, livekit, activeBoard,
     shareRequest, stats, invalidShake, lastSubmittedRow, answer, maxGuesses, toast,
   } = useGameState();
 
@@ -56,9 +75,13 @@ export default function GameScreen() {
   const [statsModal, setStatsModal] = useState(false);
   const [helpModal, setHelpModal] = useState(false);
   const [roomModal, setRoomModal] = useState(false);
-  const [menuModal, setMenuModal] = useState(false);
+  const [settingsModal, setSettingsModal] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [joinCode, setJoinCode] = useState('');
+  const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
+  const [settings, setSettings] = useState<AppSettings>({ sound: true, vibration: true, voiceChat: true, defaultDifficulty: 'easy', theme: 'dark' });
+  const [statsTab, setStatsTab] = useState<StatsTab>('overall');
+  const [showResultOverlay, setShowResultOverlay] = useState(false);
 
   useEffect(() => {
     if (!sessionId && gameStatus === 'playing') startGame(difficulty);
@@ -77,8 +100,30 @@ export default function GameScreen() {
 
   useEffect(() => {
     if (!roomId) return;
-    if (view === 'splash' || view === 'mode' || view === 'difficulty') setView('party');
+    if (view === 'splash') setView('party');
   }, [roomId, view]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(RECENT_ROOMS_KEY).then(value => {
+      if (value) setRecentRooms(JSON.parse(value));
+    });
+    AsyncStorage.getItem(SETTINGS_KEY).then(value => {
+      if (value) setSettings(prev => ({ ...prev, ...JSON.parse(value) }));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (gameStatus === 'playing') {
+      setShowResultOverlay(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowResultOverlay(true), 1000);
+    return () => clearTimeout(timer);
+  }, [gameStatus, sessionId]);
+
+  useEffect(() => {
+    if (roomId) void saveRecentRoom(roomId, roomName);
+  }, [roomId]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -103,16 +148,24 @@ export default function GameScreen() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [view, gameStatus, addLetter, removeLetter, submitGuess]);
 
-  const winPct = stats.gamesPlayed > 0 ? Math.round((stats.wins / stats.gamesPlayed) * 100) : 0;
-  const avgGuesses = stats.wins > 0
-    ? (stats.guessDistribution.reduce((s, c, i) => s + c * (i + 1), 0) / stats.wins).toFixed(1)
-    : '-';
-  const maxDist = Math.max(...stats.guessDistribution, 1);
   const activeMeta = DIFF_META[difficulty] ?? DIFF_META.easy;
   const shareFromMe = shareRequest?.from_player_id === playerId;
   const hasShareForMe = !!shareRequest && !shareFromMe;
 
   const featureLine = useMemo(() => ['Solo & Party Mode', 'Voice Chat', 'Real-time Sync', 'Multiple Difficulties'], []);
+
+  const saveRecentRoom = async (nextRoomId: string, name: string) => {
+    const next: RecentRoom = { roomId: nextRoomId, name: name.trim() || 'My Room', joinedAt: new Date().toISOString() };
+    const merged = [next, ...recentRooms.filter(room => room.roomId !== nextRoomId)].slice(0, 5);
+    setRecentRooms(merged);
+    await AsyncStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(merged));
+  };
+
+  const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+    const next = { ...settings, [key]: value };
+    setSettings(next);
+    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  };
 
   if (!sessionId) {
     return (
@@ -172,13 +225,16 @@ export default function GameScreen() {
   };
 
   const createParty = async () => {
-    await createRoom(difficulty, roomName);
-    setView('roomCreated');
+    const created = await createRoom(difficulty, roomName);
+    if (created) setView('roomCreated');
   };
 
   const joinParty = async () => {
-    await joinRoom(joinCode, roomName);
-    setView('party');
+    const joined = await joinRoom(joinCode, roomName);
+    if (joined) {
+      if (joinCode.trim()) void saveRecentRoom(joinCode.trim().toUpperCase(), roomName);
+      setView('party');
+    }
   };
 
   const switchBoard = (board: ActiveBoard) => {
@@ -196,15 +252,18 @@ export default function GameScreen() {
   };
 
   const roomSubtitle = roomId
-    ? `${activeMeta.label} - ${roomPlayers.length || 1}/8 players`
+    ? `${activeMeta.label} - ${roomPlayers.length || 1}/${maxRoomPlayers} players`
     : 'Create or join a room';
 
-  const renderPhoneStatus = () => (
-    <View style={styles.phoneStatus}>
-      <Text style={styles.statusTime}>9:41</Text>
-      <Text style={styles.statusIcons}>LTE  WiFi  BAT</Text>
-    </View>
-  );
+  const goBack = () => {
+    if (view === 'splash') return;
+    if (view === 'mode') setView('splash');
+    else if (view === 'difficulty') setView('mode');
+    else if (view === 'roomCreated') setView('party');
+    else if (view === 'solo') setView('difficulty');
+    else if (view === 'party' && !roomId) setView('mode');
+    else setView('mode');
+  };
 
   const renderHeroBrand = () => (
     <View style={styles.brandBlock}>
@@ -219,20 +278,17 @@ export default function GameScreen() {
 
   const renderTopBar = (title: string, subtitle?: string, roomActions = false) => (
     <View style={styles.topBar}>
-      <TouchableOpacity style={styles.smallIconBtn} onPress={() => {
-        if (view === 'solo') setView('mode');
-        else if (roomId && roomActions) setRoomModal(true);
-        else setView('mode');
-      }}>
-        <Text style={styles.smallIconText}>{roomActions ? 'i' : '<'}</Text>
+      <TouchableOpacity style={styles.smallIconBtn} onPress={goBack}>
+        <Text style={styles.smallIconText}>{'<'}</Text>
       </TouchableOpacity>
       <View style={styles.topTitleWrap}>
         <Text style={styles.topTitle}>{title}</Text>
         {!!subtitle && <Text style={styles.topSubtitle}>{subtitle}</Text>}
       </View>
       <View style={styles.topActions}>
+        {roomId && roomActions && <TouchableOpacity style={styles.smallIconBtn} onPress={() => setRoomModal(true)}><Text style={styles.smallIconText}>i</Text></TouchableOpacity>}
         <TouchableOpacity style={styles.smallIconBtn} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.smallIconBtn} onPress={() => setMenuModal(true)}><Text style={styles.smallIconText}>...</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.smallIconBtn} onPress={() => setSettingsModal(true)}><Text style={styles.smallIconText}>S</Text></TouchableOpacity>
       </View>
     </View>
   );
@@ -272,6 +328,7 @@ export default function GameScreen() {
         />
       </View>
       <Keyboard onKeyPress={addLetter} onEnter={submitGuess} onDelete={removeLetter} letterStates={letterStates} />
+      {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
       {roomId && activeBoard === 'individual' && gameStatus === 'playing' && (
         <TouchableOpacity style={styles.inlineAction} onPress={requestShareBoard}><Text style={styles.inlineActionText}>Share My Board</Text></TouchableOpacity>
       )}
@@ -283,7 +340,6 @@ export default function GameScreen() {
       <View style={[styles.appFrame, isWide && styles.appFrameWide]}>
         {view === 'splash' && (
           <View style={styles.screen}>
-            {renderPhoneStatus()}
             <View style={styles.splashBody}>
               {renderHeroBrand()}
               <View style={styles.splashActions}>
@@ -295,8 +351,8 @@ export default function GameScreen() {
         )}
 
         {view === 'mode' && (
-          <ScrollView contentContainerStyle={styles.scrollScreen} showsVerticalScrollIndicator={false}>
-            {renderPhoneStatus()}
+          <ScrollView contentContainerStyle={[styles.scrollScreen, styles.centeredScreen]} showsVerticalScrollIndicator={false}>
+            <TouchableOpacity style={styles.floatingBack} onPress={goBack}><Text style={styles.smallIconText}>{'<'}</Text></TouchableOpacity>
             <Text style={styles.pageTitle}>Choose Game Mode</Text>
             <Text style={styles.pageSub}>Play your way</Text>
             <TouchableOpacity style={[styles.modeCard, styles.soloCard]} onPress={() => chooseMode('solo')} activeOpacity={0.82}>
@@ -318,7 +374,6 @@ export default function GameScreen() {
 
         {view === 'difficulty' && (
           <ScrollView contentContainerStyle={styles.scrollScreen} showsVerticalScrollIndicator={false}>
-            {renderPhoneStatus()}
             {renderTopBar('Select Difficulty', 'Choose your challenge')}
             <View style={styles.difficultyList}>
               {Object.entries(DIFF_META).map(([key, meta]) => (
@@ -337,11 +392,10 @@ export default function GameScreen() {
 
         {view === 'party' && !roomId && (
           <ScrollView contentContainerStyle={styles.scrollScreen} showsVerticalScrollIndicator={false}>
-            {renderPhoneStatus()}
             {renderTopBar('Start a Party', 'Create or join a room')}
             <Text style={styles.inputLabel}>Your name</Text>
             <TextInput value={roomName} onChangeText={setRoomName} placeholder="Enter your name" placeholderTextColor="#64748B" style={styles.input} />
-            <TouchableOpacity style={styles.primaryBtn} onPress={createParty}><Text style={styles.primaryText}>Create Party</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.primaryBtn, styles.createPartyBtn]} onPress={createParty}><Text style={styles.primaryText}>Create Party</Text></TouchableOpacity>
             <View style={styles.divider}><View style={styles.line} /><Text style={styles.dividerText}>or join a room</Text><View style={styles.line} /></View>
             <Text style={styles.inputLabel}>Room code</Text>
             <View style={styles.joinRow}>
@@ -359,14 +413,21 @@ export default function GameScreen() {
             </View>
             <View style={styles.recentBox}>
               <Text style={styles.recentTitle}>Recent rooms</Text>
-              <Text style={styles.recentEmpty}>Rooms you join will appear here later.</Text>
+              {recentRooms.length === 0 ? (
+                <Text style={styles.recentEmpty}>Rooms you join will appear here later.</Text>
+              ) : recentRooms.map(room => (
+                <TouchableOpacity key={room.roomId} style={styles.recentRow} onPress={() => setJoinCode(room.roomId)}>
+                  <Text style={styles.recentCode}>{room.roomId}</Text>
+                  <Text style={styles.recentMeta}>{room.name}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           </ScrollView>
         )}
 
         {view === 'roomCreated' && roomId && (
           <View style={styles.screen}>
-            {renderPhoneStatus()}
+            {renderTopBar('Room Created', 'Share this code')}
             <View style={styles.createdBody}>
               <Text style={styles.pageTitle}>Room Created!</Text>
               <Text style={styles.pageSub}>Share this code with your friends</Text>
@@ -384,7 +445,6 @@ export default function GameScreen() {
 
         {view === 'solo' && (
           <View style={styles.gameScreen}>
-            {renderPhoneStatus()}
             {renderTopBar('Solo Game', activeMeta.label)}
             {renderBoard()}
           </View>
@@ -392,7 +452,6 @@ export default function GameScreen() {
 
         {view === 'party' && roomId && (
           <View style={styles.gameScreen}>
-            {renderPhoneStatus()}
             {renderTopBar(`Room ${roomId}`, roomSubtitle, true)}
             <View style={styles.voicePanel}>
               <Text style={styles.voiceLabel}>Voice Chat</Text>
@@ -480,31 +539,44 @@ export default function GameScreen() {
         <View style={styles.centerModal}>
           <View style={styles.helpCard}>
             <Text style={styles.sheetTitle}>Statistics</Text>
-            <StatsSummary stats={stats} winPct={winPct} avgGuesses={avgGuesses} maxDist={maxDist} gameStatus={gameStatus} guesses={guesses} />
+            <StatsSummary stats={stats} activeTab={statsTab} onTabChange={setStatsTab} gameStatus={gameStatus} guesses={guesses} />
             <TouchableOpacity style={styles.primaryBtn} onPress={() => setStatsModal(false)}><Text style={styles.primaryText}>Close</Text></TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={menuModal} transparent animationType="fade" onRequestClose={() => setMenuModal(false)}>
+      <Modal visible={settingsModal} transparent animationType="fade" onRequestClose={() => setSettingsModal(false)}>
         <View style={styles.centerModal}>
           <View style={styles.menuCard}>
-            <TouchableOpacity style={styles.menuRow} onPress={() => { setHelpModal(true); setMenuModal(false); }}><Text style={styles.menuText}>How to Play</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.menuRow} onPress={() => { setStatsModal(true); setMenuModal(false); }}><Text style={styles.menuText}>Statistics</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
+            <Text style={styles.sheetTitle}>Settings</Text>
+            <SettingToggle label="Sound Effects" value={settings.sound} onPress={() => updateSetting('sound', !settings.sound)} />
+            <SettingToggle label="Vibration" value={settings.vibration} onPress={() => updateSetting('vibration', !settings.vibration)} />
+            <SettingToggle label="Voice Chat" value={settings.voiceChat} onPress={() => updateSetting('voiceChat', !settings.voiceChat)} />
+            <View style={styles.settingRow}>
+              <Text style={styles.menuText}>Default Difficulty</Text>
+              <View style={styles.settingOptions}>
+                {Object.entries(DIFF_META).map(([key, meta]) => (
+                  <TouchableOpacity key={key} style={[styles.settingPill, settings.defaultDifficulty === key && { borderColor: meta.color }]} onPress={() => updateSetting('defaultDifficulty', key)}>
+                    <Text style={[styles.settingPillText, settings.defaultDifficulty === key && { color: meta.color }]}>{meta.mark}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+            <TouchableOpacity style={styles.menuRow} onPress={() => { setHelpModal(true); setSettingsModal(false); }}><Text style={styles.menuText}>How to Play</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.menuRow} onPress={() => { setStatsModal(true); setSettingsModal(false); }}><Text style={styles.menuText}>Statistics</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
             <TouchableOpacity style={styles.menuRow}><Text style={styles.menuText}>Achievements</Text><Text style={styles.menuMuted}>Soon</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.menuRow}><Text style={styles.menuText}>Settings</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => setMenuModal(false)}><Text style={styles.primaryText}>Close</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => setSettingsModal(false)}><Text style={styles.primaryText}>Close</Text></TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {gameStatus !== 'playing' && (view === 'solo' || (view === 'party' && roomId)) && (
+      {showResultOverlay && gameStatus !== 'playing' && (view === 'solo' || (view === 'party' && roomId)) && (
         <View style={styles.overlay}>
           <View style={styles.resultCard}>
             <View style={styles.logoMarkSmall}><Text style={styles.logoMarkText}>W</Text></View>
             <Text style={[styles.resultTitle, gameStatus === 'won' ? styles.win : styles.loss]}>{gameStatus === 'won' ? 'You Win!' : 'Game Over'}</Text>
             {gameStatus === 'lost' && answer && <Text style={styles.answerText}>The word was {answer}</Text>}
-            <StatsSummary stats={stats} winPct={winPct} avgGuesses={avgGuesses} maxDist={maxDist} gameStatus={gameStatus} guesses={guesses} compact />
+            <StatsSummary stats={stats} activeTab="overall" gameStatus={gameStatus} guesses={guesses} compact />
             {roomId ? (
               <>
                 <TouchableOpacity style={styles.primaryBtn} onPress={createSharedGame}><Text style={styles.primaryText}>Continue Together</Text></TouchableOpacity>
@@ -527,23 +599,51 @@ const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
   </View>
 );
 
+const SettingToggle: React.FC<{ label: string; value: boolean; onPress: () => void }> = ({ label, value, onPress }) => (
+  <TouchableOpacity style={styles.settingRow} onPress={onPress} activeOpacity={0.78}>
+    <Text style={styles.menuText}>{label}</Text>
+    <View style={[styles.toggleTrack, value && styles.toggleTrackOn]}>
+      <View style={[styles.toggleThumb, value && styles.toggleThumbOn]} />
+    </View>
+  </TouchableOpacity>
+);
+
 const StatsSummary: React.FC<{
   stats: any;
-  winPct: number;
-  avgGuesses: string;
-  maxDist: number;
+  activeTab: StatsTab;
+  onTabChange?: (tab: StatsTab) => void;
   gameStatus: 'playing' | 'won' | 'lost';
   guesses: string[];
   compact?: boolean;
-}> = ({ stats, winPct, avgGuesses, maxDist, gameStatus, guesses, compact = false }) => (
-  <>
-    <View style={styles.statsRow}>
-      {[{ v: stats.gamesPlayed, l: 'Played' }, { v: `${winPct}%`, l: 'Win Rate' }, { v: stats.currentStreak, l: 'Streak' }, { v: stats.maxStreak, l: 'Best' }].map(({ v, l }) => (
-        <View key={l} style={styles.statBox}><Text style={styles.statValue}>{v}</Text><Text style={styles.statLabel}>{l}</Text></View>
-      ))}
-    </View>
-    {!compact && <Text style={styles.avgLine}>Avg guesses per win: <Text style={{ fontWeight: '800' }}>{avgGuesses}</Text></Text>}
-    {!compact && stats.guessDistribution.map((count: number, idx: number) => {
+}> = ({ stats, activeTab, onTabChange, gameStatus, guesses, compact = false }) => {
+  const source = activeTab === 'overall'
+    ? stats
+    : { gamesPlayed: 0, wins: 0, losses: 0, currentStreak: 0, maxStreak: 0, guessDistribution: [0, 0, 0, 0, 0, 0], ...(stats.byDifficulty?.[activeTab] ?? {}) };
+  const winPct = source.gamesPlayed > 0 ? Math.round((source.wins / source.gamesPlayed) * 100) : 0;
+  const avgGuesses = source.wins > 0
+    ? (source.guessDistribution.reduce((sum: number, count: number, index: number) => sum + count * (index + 1), 0) / source.wins).toFixed(1)
+    : '-';
+  const maxDist = Math.max(...source.guessDistribution, 1);
+  const tabs: StatsTab[] = ['overall', 'easy', 'moderate', 'difficult', 'prodigy'];
+
+  return (
+    <>
+      {!compact && (
+        <View style={styles.statsTabs}>
+          {tabs.map(tab => (
+            <TouchableOpacity key={tab} style={[styles.statsTab, activeTab === tab && styles.statsTabActive]} onPress={() => onTabChange?.(tab)}>
+              <Text style={[styles.statsTabText, activeTab === tab && styles.statsTabTextActive]}>{tab}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+      <View style={styles.statsRow}>
+        {[{ v: source.gamesPlayed, l: 'Played' }, { v: `${winPct}%`, l: 'Win Rate' }, { v: source.currentStreak, l: 'Streak' }, { v: source.maxStreak, l: 'Best' }].map(({ v, l }) => (
+          <View key={l} style={styles.statBox}><Text style={styles.statValue}>{v}</Text><Text style={styles.statLabel}>{l}</Text></View>
+        ))}
+      </View>
+      {!compact && <Text style={styles.avgLine}>Avg guesses per win: <Text style={{ fontWeight: '800' }}>{avgGuesses}</Text></Text>}
+      {!compact && source.guessDistribution.map((count: number, idx: number) => {
       const pct = Math.max((count / maxDist) * 100, 5);
       const isLast = gameStatus === 'won' && idx === guesses.length - 1;
       return (
@@ -552,9 +652,10 @@ const StatsSummary: React.FC<{
           <View style={[styles.distBar, { width: `${pct}%` }, isLast ? { backgroundColor: '#16C75A' } : null]}><Text style={styles.distCount}>{count}</Text></View>
         </View>
       );
-    })}
-  </>
-);
+      })}
+    </>
+  );
+};
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B0F16', alignItems: 'center' },
@@ -563,10 +664,9 @@ const styles = StyleSheet.create({
   appFrame: { flex: 1, width: '100%', maxWidth: 440, backgroundColor: '#0B0F16' },
   appFrameWide: { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#1F2937' },
   screen: { flex: 1, paddingHorizontal: 20, paddingBottom: 18 },
-  scrollScreen: { flexGrow: 1, paddingHorizontal: 20, paddingBottom: 22 },
-  phoneStatus: { height: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  statusTime: { color: '#F8FAFC', fontSize: 12, fontWeight: '800' },
-  statusIcons: { color: '#F8FAFC', fontSize: 10, fontWeight: '800' },
+  scrollScreen: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 22 },
+  centeredScreen: { justifyContent: 'center' },
+  floatingBack: { position: 'absolute', left: 20, top: 12, width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   splashBody: { flex: 1, justifyContent: 'center', gap: 34 },
   brandBlock: { alignItems: 'center' },
   logoMark: { width: 76, height: 76, borderRadius: 20, backgroundColor: '#16C75A', alignItems: 'center', justifyContent: 'center', shadowColor: '#16C75A', shadowOpacity: 0.55, shadowRadius: 24, elevation: 12 },
@@ -578,12 +678,12 @@ const styles = StyleSheet.create({
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 18 },
   featurePill: { color: '#D1D5DB', fontSize: 11, fontWeight: '800', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999 },
   splashActions: { gap: 12 },
-  pageTitle: { color: '#F8FAFC', fontSize: 24, fontWeight: '900', textAlign: 'center', marginTop: 28 },
+  pageTitle: { color: '#F8FAFC', fontSize: 24, fontWeight: '900', textAlign: 'center', marginTop: 18 },
   pageSub: { color: '#9CA3AF', fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 6, marginBottom: 24 },
   topBar: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 12 },
   smallIconBtn: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   smallIconText: { color: '#F8FAFC', fontSize: 18, fontWeight: '900' },
-  topTitleWrap: { flex: 1 },
+  topTitleWrap: { flex: 1, minWidth: 0 },
   topTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '900' },
   topSubtitle: { color: '#9CA3AF', fontSize: 12, fontWeight: '800', marginTop: 2 },
   topActions: { flexDirection: 'row', gap: 8 },
@@ -610,6 +710,7 @@ const styles = StyleSheet.create({
   outlineText: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
   inputLabel: { color: '#D1D5DB', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
   input: { minHeight: 52, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', color: '#F8FAFC', paddingHorizontal: 14, fontSize: 15, fontWeight: '800' },
+  createPartyBtn: { marginTop: 14 },
   joinRow: { flexDirection: 'row', gap: 10 },
   joinInput: { flex: 1, letterSpacing: 3, textTransform: 'uppercase' },
   joinBtn: { minHeight: 52, borderRadius: 12, backgroundColor: '#8B5CF6', paddingHorizontal: 18, alignItems: 'center', justifyContent: 'center' },
@@ -619,11 +720,14 @@ const styles = StyleSheet.create({
   recentBox: { borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 14, marginTop: 16 },
   recentTitle: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
   recentEmpty: { color: '#9CA3AF', fontSize: 12, fontWeight: '700', marginTop: 6 },
+  recentRow: { minHeight: 42, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', paddingHorizontal: 12, marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  recentCode: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', letterSpacing: 2 },
+  recentMeta: { color: '#9CA3AF', fontSize: 12, fontWeight: '800' },
   createdBody: { flex: 1, justifyContent: 'center', gap: 14 },
   createdCodeBox: { minHeight: 78, borderRadius: 16, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center' },
   createdCode: { color: '#F8FAFC', fontSize: 30, fontWeight: '900', letterSpacing: 9 },
   waitingText: { color: '#D1D5DB', fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center', marginVertical: 8 },
-  gameScreen: { flex: 1, paddingHorizontal: 12, paddingBottom: 8 },
+  gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   voicePanel: { borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 9, marginBottom: 8, gap: 6 },
   voiceLabel: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
   playerStrip: { flexDirection: 'row', gap: 6, marginBottom: 8 },
@@ -639,7 +743,7 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: '#16C75A' },
   segmentText: { color: '#9CA3AF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   segmentTextActive: { color: '#fff' },
-  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 232 },
+  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 206 },
   prompt: { width: '100%', borderRadius: 14, borderWidth: 1, borderColor: '#FACC15', backgroundColor: '#2A2108', padding: 10, marginBottom: 6 },
   promptText: { color: '#FDE68A', fontWeight: '800', fontSize: 13 },
   promptRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
@@ -649,6 +753,7 @@ const styles = StyleSheet.create({
   ghostText: { color: '#F8FAFC', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
   inlineAction: { marginTop: 8, minHeight: 40, borderRadius: 13, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
   inlineActionText: { color: '#60A5FA', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  typingLine: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', minHeight: 18, marginTop: 4 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   sheet: { backgroundColor: '#151C27', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, borderWidth: 1, borderColor: '#283447', gap: 12 },
   sheetTitle: { color: '#F8FAFC', fontSize: 20, fontWeight: '900', marginBottom: 4 },
@@ -688,6 +793,14 @@ const styles = StyleSheet.create({
   menuText: { color: '#F8FAFC', fontSize: 14, fontWeight: '900' },
   menuMuted: { color: '#9CA3AF', fontSize: 12, fontWeight: '900' },
   chevron: { color: '#9CA3AF', fontSize: 16, fontWeight: '900' },
+  settingRow: { minHeight: 52, borderRadius: 14, backgroundColor: '#111827', borderWidth: 1, borderColor: '#283447', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  toggleTrack: { width: 46, height: 26, borderRadius: 999, backgroundColor: '#334155', padding: 3, justifyContent: 'center' },
+  toggleTrackOn: { backgroundColor: '#16C75A' },
+  toggleThumb: { width: 20, height: 20, borderRadius: 999, backgroundColor: '#F8FAFC' },
+  toggleThumbOn: { alignSelf: 'flex-end' },
+  settingOptions: { flexDirection: 'row', gap: 6 },
+  settingPill: { width: 32, height: 32, borderRadius: 10, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', backgroundColor: '#151C27' },
+  settingPillText: { color: '#9CA3AF', fontSize: 12, fontWeight: '900' },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(11,15,22,0.94)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   resultCard: { width: '100%', maxWidth: 360, borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 20, gap: 12, alignItems: 'stretch' },
   resultTitle: { fontSize: 28, fontWeight: '900', textAlign: 'center' },
@@ -695,6 +808,11 @@ const styles = StyleSheet.create({
   loss: { color: '#EF4444' },
   answerText: { color: '#F8FAFC', textAlign: 'center', fontSize: 16, fontWeight: '800' },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  statsTabs: { flexDirection: 'row', gap: 4, marginBottom: 14 },
+  statsTab: { flex: 1, minHeight: 30, borderRadius: 10, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  statsTabActive: { borderColor: '#16C75A', backgroundColor: '#10251A' },
+  statsTabText: { color: '#9CA3AF', fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
+  statsTabTextActive: { color: '#16C75A' },
   statBox: { alignItems: 'center', flex: 1 },
   statValue: { color: '#F8FAFC', fontSize: 24, fontWeight: '900' },
   statLabel: { color: '#9CA3AF', fontSize: 10, textTransform: 'uppercase', fontWeight: '800' },

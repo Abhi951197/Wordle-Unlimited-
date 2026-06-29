@@ -20,6 +20,7 @@ import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
 import { ActiveBoard, useGameState } from '@/store/GameState';
+import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
   easy: { color: '#16C75A', label: 'Easy', desc: 'Classic Wordle rules', guesses: '6 guesses', mark: 'E' },
@@ -193,6 +194,7 @@ export default function GameScreen() {
 
   const shareRoom = async () => {
     if (!roomId) return;
+    trackEvent('Room Invite Shared', { room_id: roomId });
     const inviteLink = getInviteLink();
     const message = `Join my Wordle Unlimited party room ${roomId}: ${inviteLink}`;
     if (Platform.OS === 'web' && typeof navigator !== 'undefined') {
@@ -208,6 +210,7 @@ export default function GameScreen() {
   };
 
   const chooseMode = (mode: PlayMode) => {
+    trackEvent('Mode Selected', { mode });
     setSelectedMode(mode);
     if (mode === 'solo') setView('difficulty');
     else setView('party');
@@ -288,7 +291,7 @@ export default function GameScreen() {
       <View style={styles.topActions}>
         {roomId && roomActions && <TouchableOpacity style={styles.smallIconBtn} onPress={() => setRoomModal(true)}><Text style={styles.smallIconText}>i</Text></TouchableOpacity>}
         <TouchableOpacity style={styles.smallIconBtn} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.smallIconBtn} onPress={() => setSettingsModal(true)}><Text style={styles.smallIconText}>S</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.smallIconBtn} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><Text style={styles.smallIconText}>S</Text></TouchableOpacity>
       </View>
     </View>
   );

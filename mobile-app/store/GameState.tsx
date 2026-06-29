@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { trackEvent } from '@/utils/analytics';
 
 interface Stats {
   gamesPlayed: number;
@@ -372,6 +373,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setWordLength(data.length);
       setDifficulty(diff);
       resetBoardState();
+      trackEvent('Game Started', { mode: 'solo', difficulty: diff });
     } catch {
       showToast('Cannot reach backend - is it running?', 'error');
     }
@@ -394,6 +396,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       resetBoardState();
       applyRoomState(data);
       showToast(`Room ${data.room_id} is ready`, 'info');
+      trackEvent('Room Created', { difficulty: diff });
       return true;
     } catch {
       showToast('Could not create room', 'error');
@@ -432,6 +435,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       resetBoardState();
       applyRoomState(data);
       showToast(`Joined room ${data.room_id}`, 'info');
+      trackEvent('Room Joined', { room_id: data.room_id });
       return true;
     } catch {
       showToast('Could not join room', 'error');
@@ -473,27 +477,33 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const createSharedGame = async () => {
     await postRoomAction('shared-game', {});
+    trackEvent('Shared Game Started', { difficulty });
   };
 
   const createIndividualGame = async () => {
     await postRoomAction('individual-game', {});
+    trackEvent('Individual Game Started', { difficulty });
   };
 
   const changeRoomDifficulty = async (nextDifficulty: string) => {
     await postRoomAction('difficulty', { difficulty: nextDifficulty });
+    trackEvent('Room Difficulty Changed', { difficulty: nextDifficulty });
   };
 
   const setActiveBoard = async (board: ActiveBoard) => {
     await postRoomAction('active-board', { board });
+    trackEvent('Board Mode Switched', { board });
   };
 
   const requestShareBoard = async () => {
     await postRoomAction('share-request', {});
     showToast('Board share request sent', 'info');
+    trackEvent('Board Share Requested', { difficulty });
   };
 
   const respondToShareRequest = async (accept: boolean) => {
     await postRoomAction('share-request/respond', { accept });
+    trackEvent('Board Share Responded', { accepted: accept });
   };
 
   useEffect(() => {
@@ -641,6 +651,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       if (roomId) {
         applyRoomState(data);
+        trackEvent('Guess Submitted', { mode: 'party', difficulty, guess_count: guesses.length + 1 });
+        if (data.won) trackEvent('Game Won', { mode: 'party', difficulty, guesses: guesses.length + 1 });
+        else if (data.game_over) trackEvent('Game Lost', { mode: 'party', difficulty, guesses: guesses.length + 1 });
         return;
       }
 
@@ -648,6 +661,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const newGuesses = [...guesses, guess];
       setResults(newResults);
       setGuesses(newGuesses);
+      trackEvent('Guess Submitted', { mode: 'solo', difficulty, guess_count: newGuesses.length });
 
       const newStates = { ...letterStates };
       for (let i = 0; i < guess.length; i++) {
@@ -667,10 +681,12 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (data.won) {
           setGameStatus('won');
           saveAndSetStats(buildUpdatedStats(true, newGuesses.length));
+          trackEvent('Game Won', { mode: 'solo', difficulty, guesses: newGuesses.length });
         } else if (data.game_over) {
           setAnswer(data.answer);
           setGameStatus('lost');
           saveAndSetStats(buildUpdatedStats(false, newGuesses.length));
+          trackEvent('Game Lost', { mode: 'solo', difficulty, guesses: newGuesses.length });
         }
       }, 1600);
     } catch {

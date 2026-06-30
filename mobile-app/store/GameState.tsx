@@ -34,6 +34,7 @@ export interface LiveKitSession {
 export interface RoomPlayer {
   player_id: string;
   player_name: string;
+  player_emoji?: string;
   joined_at: string;
   last_active_at?: string | null;
 }
@@ -50,6 +51,7 @@ export interface BoardState {
   answer?: string | null;
   typing_player_id?: string | null;
   typing_player_name?: string | null;
+  typing_player_emoji?: string | null;
 }
 
 export interface ShareRequestState {
@@ -68,9 +70,11 @@ interface GameStateContextType {
   roomId: string | null;
   playerId: string | null;
   playerName: string;
+  playerEmoji: string;
   roomPlayers: RoomPlayer[];
   maxRoomPlayers: number;
   typingPlayerName: string | null;
+  typingPlayerEmoji: string | null;
   livekit: LiveKitSession | null;
   activeBoard: ActiveBoard;
   sharedBoard: BoardState | null;
@@ -83,8 +87,8 @@ interface GameStateContextType {
   letterStates: Record<string, 'correct' | 'present' | 'absent' | 'empty' | 'banned'>;
   stats: Stats;
   startGame: (difficulty: string) => Promise<void>;
-  createRoom: (difficulty: string, playerName: string) => Promise<boolean>;
-  joinRoom: (roomId: string, playerName: string) => Promise<boolean>;
+  createRoom: (difficulty: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
+  joinRoom: (roomId: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
   leaveRoom: () => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
@@ -126,9 +130,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [roomId, setRoomId] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState('Player');
+  const [playerEmoji, setPlayerEmoji] = useState('🙂');
   const [roomPlayers, setRoomPlayers] = useState<RoomPlayer[]>([]);
   const [maxRoomPlayers, setMaxRoomPlayers] = useState(8);
   const [typingPlayerName, setTypingPlayerName] = useState<string | null>(null);
+  const [typingPlayerEmoji, setTypingPlayerEmoji] = useState<string | null>(null);
   const [livekit, setLivekit] = useState<LiveKitSession | null>(null);
   const [activeBoard, setActiveBoardState] = useState<ActiveBoard>('shared');
   const [sharedBoard, setSharedBoard] = useState<BoardState | null>(null);
@@ -153,6 +159,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     playerId: null,
   });
   const currentGuessRef = useRef('');
+  const submittingRef = useRef(false);
+  const inputSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputSyncSeq = useRef(0);
+  const lastLocalInputAt = useRef(0);
 
   useEffect(() => {
     latestRoomRef.current = { roomId, playerId };
@@ -181,6 +191,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           body: JSON.stringify({
             player_id: saved.playerId,
             player_name: saved.playerName || 'Player',
+            player_emoji: saved.playerEmoji || '🙂',
           }),
         });
         if (!res.ok) {
@@ -191,6 +202,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const data = await res.json();
         setPlayerId(data.player_id);
         setPlayerName(saved.playerName || 'Player');
+        setPlayerEmoji(saved.playerEmoji || '🙂');
         applyRoomState(data);
       } catch {
         await AsyncStorage.removeItem(ROOM_STORAGE_KEY);
@@ -275,6 +287,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setLastSubmittedRow(-1);
     setAnswer(null);
     setTypingPlayerName(null);
+    setTypingPlayerEmoji(null);
     setToastState(null);
   };
 
@@ -306,13 +319,18 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const applyBoard = (board: BoardState | null) => {
     if (!board) return;
+    const shouldKeepLocalGuess = !!roomId
+      && board.session_id === sessionId
+      && Date.now() - lastLocalInputAt.current < 900;
     setSessionId(board.session_id);
     setWordLength(board.length);
     setDifficulty(board.difficulty);
     setGuesses(board.guesses ?? []);
     setResults(board.results ?? []);
-    setCurrentGuess(board.current_guess ?? '');
-    currentGuessRef.current = board.current_guess ?? '';
+    if (!shouldKeepLocalGuess) {
+      setCurrentGuess(board.current_guess ?? '');
+      currentGuessRef.current = board.current_guess ?? '';
+    }
     setLetterStates(buildLetterStates(board.guesses ?? [], board.results ?? [], board.difficulty));
     setGameStatus(board.won ? 'won' : board.game_over ? 'lost' : 'playing');
     setAnswer(board.answer ?? null);
@@ -333,6 +351,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIndividualBoard(nextIndividual);
     setShareRequest(data.share_request ?? null);
     setTypingPlayerName(data.typing_player_id === playerId ? null : data.typing_player_name ?? null);
+    setTypingPlayerEmoji(data.typing_player_id === playerId ? null : data.typing_player_emoji ?? null);
     applyBoard(active ?? {
       session_id: data.session_id,
       difficulty: data.difficulty,
@@ -346,11 +365,12 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   };
 
-  const persistRoom = async (data: any, name: string) => {
+  const persistRoom = async (data: any, name: string, emoji: string) => {
     await AsyncStorage.setItem(ROOM_STORAGE_KEY, JSON.stringify({
       roomId: data.room_id,
       playerId: data.player_id,
       playerName: name.trim() || 'Player',
+      playerEmoji: emoji || '🙂',
     }));
   };
 
@@ -361,9 +381,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setSessionId(data.session_id);
       setRoomId(null);
       setPlayerId(null);
+      setPlayerEmoji('🙂');
       setRoomPlayers([]);
       setMaxRoomPlayers(8);
       setTypingPlayerName(null);
+      setTypingPlayerEmoji(null);
       setLivekit(null);
       setActiveBoardState('shared');
       setSharedBoard(null);
@@ -379,12 +401,12 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const createRoom = async (diff: string, name: string) => {
+  const createRoom = async (diff: string, name: string, emoji = '🙂') => {
     try {
       const res = await fetch(`${API_URL}/rooms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty: diff, player_name: name }),
+        body: JSON.stringify({ difficulty: diff, player_name: name, player_emoji: emoji }),
       });
       if (!res.ok) throw new Error('Could not create room');
 
@@ -392,7 +414,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const cleanName = name.trim() || 'Player';
       setPlayerId(data.player_id);
       setPlayerName(cleanName);
-      await persistRoom(data, cleanName);
+      setPlayerEmoji(emoji);
+      await persistRoom(data, cleanName, emoji);
       resetBoardState();
       applyRoomState(data);
       showToast(`Room ${data.room_id} is ready`, 'info');
@@ -404,7 +427,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const joinRoom = async (code: string, name: string) => {
+  const joinRoom = async (code: string, name: string, emoji = '🙂') => {
     const normalizedCode = code.trim().toUpperCase();
     if (!normalizedCode) {
       showToast('Enter a room code', 'error');
@@ -415,7 +438,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const res = await fetch(`${API_URL}/rooms/${normalizedCode}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_id: playerId, player_name: name }),
+        body: JSON.stringify({ player_id: playerId, player_name: name, player_emoji: emoji }),
       });
       if (res.status === 404) {
         showToast('Room not found', 'error');
@@ -431,7 +454,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const cleanName = name.trim() || 'Player';
       setPlayerId(data.player_id);
       setPlayerName(cleanName);
-      await persistRoom(data, cleanName);
+      setPlayerEmoji(emoji);
+      await persistRoom(data, cleanName, emoji);
       resetBoardState();
       applyRoomState(data);
       showToast(`Joined room ${data.room_id}`, 'info');
@@ -446,9 +470,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const leaveRoom = () => {
     setRoomId(null);
     setPlayerId(null);
+    setPlayerEmoji('🙂');
     setRoomPlayers([]);
     setMaxRoomPlayers(8);
     setTypingPlayerName(null);
+    setTypingPlayerEmoji(null);
     setLivekit(null);
     setActiveBoardState('shared');
     setSharedBoard(null);
@@ -520,7 +546,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     };
 
-    const timer = setInterval(refresh, 1500);
+    const timer = setInterval(refresh, 450);
     return () => clearInterval(timer);
   }, [roomId, playerId]);
 
@@ -536,23 +562,28 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const syncRoomInput = async (nextGuess: string) => {
+  const syncRoomInput = (nextGuess: string) => {
     const activeRoomId = latestRoomRef.current.roomId;
     const activePlayerId = latestRoomRef.current.playerId;
     if (!activeRoomId || !activePlayerId) return;
 
-    try {
-      await fetch(`${API_URL}/rooms/${activeRoomId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          player_id: activePlayerId,
-          current_guess: nextGuess,
-        }),
-      });
-    } catch {
-      // Current-letter sync is best effort; polling will repair state.
-    }
+    const seq = ++inputSyncSeq.current;
+    if (inputSyncTimer.current) clearTimeout(inputSyncTimer.current);
+    inputSyncTimer.current = setTimeout(async () => {
+      if (seq !== inputSyncSeq.current) return;
+      try {
+        await fetch(`${API_URL}/rooms/${activeRoomId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            player_id: activePlayerId,
+            current_guess: nextGuess,
+          }),
+        });
+      } catch {
+        // Current-letter sync is best effort; polling will repair state.
+      }
+    }, 90);
   };
 
   const addLetter = (letter: string) => {
@@ -561,6 +592,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (guess.length < wordLength) {
       const nextGuess = guess + letter;
       currentGuessRef.current = nextGuess;
+      lastLocalInputAt.current = Date.now();
       setCurrentGuess(nextGuess);
       syncRoomInput(nextGuess);
     }
@@ -570,13 +602,14 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (gameStatus !== 'playing') return;
     const nextGuess = currentGuessRef.current.slice(0, -1);
     currentGuessRef.current = nextGuess;
+    lastLocalInputAt.current = Date.now();
     setCurrentGuess(nextGuess);
     syncRoomInput(nextGuess);
   };
 
   const submitGuess = async () => {
     const guess = currentGuessRef.current;
-    if (gameStatus !== 'playing' || !sessionId) return;
+    if (submittingRef.current || gameStatus !== 'playing' || !sessionId) return;
 
     if (guess.length !== wordLength) {
       triggerShake();
@@ -618,6 +651,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
 
     try {
+      submittingRef.current = true;
       const endpoint = roomId && playerId ? `${API_URL}/rooms/${roomId}/guess` : `${API_URL}/guess`;
       const body = roomId && playerId
         ? { player_id: playerId, guess }
@@ -634,7 +668,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
       if (res.status === 409) {
-        showToast('This board is already finished', 'warning');
+        showToast('That guess is already being submitted', 'warning');
         return;
       }
       if (!res.ok) {
@@ -647,6 +681,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setLastSubmittedRow(guesses.length);
       setCurrentGuess('');
       currentGuessRef.current = '';
+      lastLocalInputAt.current = 0;
       syncRoomInput('');
 
       if (roomId) {
@@ -691,6 +726,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }, 1600);
     } catch {
       showToast('Network error - check your connection', 'error');
+    } finally {
+      setTimeout(() => {
+        submittingRef.current = false;
+      }, 450);
     }
   };
 
@@ -698,8 +737,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   return (
     <GameStateContext.Provider value={{
-      difficulty, wordLength, sessionId, roomId, playerId, playerName,
-      roomPlayers, maxRoomPlayers, typingPlayerName, livekit, activeBoard, sharedBoard, individualBoard, shareRequest,
+      difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji,
+      roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest,
       guesses, results, currentGuess, gameStatus, letterStates, stats,
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, addLetter, removeLetter,

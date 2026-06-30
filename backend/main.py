@@ -57,6 +57,7 @@ class GuessResponse(BaseModel):
 class PlayerRequest(BaseModel):
     player_name: str = "Player"
     player_id: str | None = None
+    player_emoji: str = "🙂"
 
 class RoomCreateRequest(PlayerRequest):
     difficulty: str = "easy"
@@ -95,6 +96,7 @@ class LiveKitInfo(BaseModel):
 class RoomPlayer(BaseModel):
     player_id: str
     player_name: str
+    player_emoji: str = "🙂"
     joined_at: str
     last_active_at: str | None = None
 
@@ -110,6 +112,7 @@ class BoardState(BaseModel):
     answer: str | None = None
     typing_player_id: str | None = None
     typing_player_name: str | None = None
+    typing_player_emoji: str | None = None
 
 class ShareRequestState(BaseModel):
     from_player_id: str
@@ -138,6 +141,7 @@ class RoomStateResponse(BaseModel):
     max_players: int = MAX_ROOM_PLAYERS
     typing_player_id: str | None = None
     typing_player_name: str | None = None
+    typing_player_emoji: str | None = None
 
 class RoomJoinResponse(RoomStateResponse):
     player_id: str
@@ -194,6 +198,10 @@ def _clean_player_name(player_name: str) -> str:
         return "Player"
     return name[:32]
 
+def _clean_player_emoji(player_emoji: str | None) -> str:
+    emoji = (player_emoji or "🙂").strip()
+    return emoji[:4] or "🙂"
+
 def _create_session(difficulty: str) -> str:
     word = get_word(difficulty)
     session_id = str(uuid.uuid4())
@@ -207,6 +215,7 @@ def _create_session(difficulty: str) -> str:
         "won": False,
         "typing_player_id": None,
         "typing_player_name": None,
+        "typing_player_emoji": None,
     }
     return session_id
 
@@ -227,6 +236,7 @@ def _board_state(session_id: str | None) -> BoardState | None:
         answer=session["word"] if session["game_over"] and not session["won"] else None,
         typing_player_id=session.get("typing_player_id"),
         typing_player_name=session.get("typing_player_name"),
+        typing_player_emoji=session.get("typing_player_emoji"),
     )
 
 def _evaluate_guess(target_word: str, guess: str) -> list[str]:
@@ -301,6 +311,7 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         max_players=MAX_ROOM_PLAYERS,
         typing_player_id=session.get("typing_player_id"),
         typing_player_name=session.get("typing_player_name"),
+        typing_player_emoji=session.get("typing_player_emoji"),
     )
 
 def _require_room_player(room_id: str, player_id: str) -> dict[str, Any]:
@@ -331,6 +342,9 @@ def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     if session.get("game_over"):
         raise HTTPException(status_code=409, detail="Game already finished")
 
+    if session["guesses"] and session["guesses"][-1] == guess:
+        raise HTTPException(status_code=409, detail="Duplicate guess")
+
     if len(guess) != len(target_word):
         raise HTTPException(status_code=400, detail="Invalid guess length")
 
@@ -343,6 +357,7 @@ def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     session["current_guess"] = ""
     session["typing_player_id"] = None
     session["typing_player_name"] = None
+    session["typing_player_emoji"] = None
 
     won = states.count("correct") == len(target_word)
     max_guesses = 4 if session["difficulty"] == "prodigy" else 6
@@ -369,9 +384,12 @@ def submit_guess(req: GuessRequest):
 @app.post("/rooms", response_model=RoomJoinResponse)
 def create_room(req: RoomCreateRequest):
     _cleanup_idle_rooms()
+    if not req.player_name.strip():
+        raise HTTPException(status_code=400, detail="Player name is required")
     room_id = _room_code()
     player_id = req.player_id or str(uuid.uuid4())
     player_name = _clean_player_name(req.player_name)
+    player_emoji = _clean_player_emoji(req.player_emoji)
     shared_session_id = _create_session(req.difficulty)
     individual_session_id = _create_session(req.difficulty)
     rooms[room_id] = {
@@ -388,6 +406,7 @@ def create_room(req: RoomCreateRequest):
             player_id: {
                 "player_id": player_id,
                 "player_name": player_name,
+                "player_emoji": player_emoji,
                 "joined_at": _now_iso(),
                 "last_active_at": _now_iso(),
             }
@@ -400,6 +419,8 @@ def create_room(req: RoomCreateRequest):
 @app.post("/rooms/{room_id}/join", response_model=RoomJoinResponse)
 def join_room(room_id: str, req: RoomJoinRequest):
     _cleanup_idle_rooms()
+    if not req.player_name.strip():
+        raise HTTPException(status_code=400, detail="Player name is required")
     room_id = room_id.strip().upper()
     if room_id not in rooms:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -413,6 +434,7 @@ def join_room(room_id: str, req: RoomJoinRequest):
     rooms[room_id]["players"][player_id] = {
         "player_id": player_id,
         "player_name": _clean_player_name(req.player_name),
+        "player_emoji": _clean_player_emoji(req.player_emoji),
         "joined_at": rooms[room_id]["players"].get(player_id, {}).get("joined_at", _now_iso()),
         "last_active_at": _now_iso(),
     }
@@ -448,9 +470,11 @@ def update_room_input(room_id: str, req: RoomInputRequest):
         if guess:
             session["typing_player_id"] = req.player_id
             session["typing_player_name"] = room["players"][req.player_id]["player_name"]
+            session["typing_player_emoji"] = room["players"][req.player_id].get("player_emoji", "🙂")
         else:
             session["typing_player_id"] = None
             session["typing_player_name"] = None
+            session["typing_player_emoji"] = None
         _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Room, RoomEvent, Track, createLocalAudioTrack } from 'livekit-client';
 import type { LocalAudioTrack } from 'livekit-client';
 import type { LiveKitSession } from '@/store/GameState';
@@ -148,30 +149,31 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
     <View style={[styles.container, compact && styles.compactContainer]}>
       {Platform.OS === 'web' && <View ref={audioHostRef} style={styles.audioHost as any} />}
       <TouchableOpacity
-        style={[styles.button, connected && styles.buttonConnected]}
+        style={[styles.voiceButton, connected && styles.buttonConnected]}
         onPress={connected ? unlockAudio : connect}
         activeOpacity={0.75}
       >
-        <Text style={styles.buttonText}>
-          {connected ? 'Voice On' : status === 'connecting' ? 'Connecting...' : 'Join Voice'}
-        </Text>
+        <MaterialCommunityIcons name={connected ? 'volume-high' : 'microphone'} size={16} color="#fff" />
+        <Text style={styles.buttonText}>{connected ? 'On' : status === 'connecting' ? '...' : 'Join'}</Text>
       </TouchableOpacity>
       {connected && (
         <TouchableOpacity
-          style={[styles.iconButton, muted && styles.mutedButton]}
+          style={[styles.roundIconButton, muted && styles.mutedButton]}
           onPress={toggleMute}
           activeOpacity={0.75}
         >
-          <Text style={styles.iconButtonText}>{muted ? 'Unmute' : 'Mute'}</Text>
+          <MaterialCommunityIcons name={muted ? 'microphone-off' : 'microphone'} size={17} color={muted ? '#facc15' : '#f8fafc'} />
+          <Text style={styles.srText}>{muted ? 'Unmute' : 'Mute'}</Text>
         </TouchableOpacity>
       )}
       {connected && (
         <TouchableOpacity
-          style={[styles.iconButton, styles.leaveButton]}
+          style={[styles.roundIconButton, styles.leaveButton]}
           onPress={disconnect}
           activeOpacity={0.75}
         >
-          <Text style={styles.iconButtonText}>Leave</Text>
+          <MaterialCommunityIcons name="phone-hangup" size={17} color="#fff" />
+          <Text style={styles.srText}>Leave</Text>
         </TouchableOpacity>
       )}
       <Text style={styles.meta}>
@@ -198,10 +200,13 @@ const styles = StyleSheet.create({
     height: 0,
     overflow: 'hidden',
   },
-  button: {
+  voiceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: '#1f2933',
-    borderRadius: 6,
-    paddingHorizontal: 12,
+    borderRadius: 12,
+    paddingHorizontal: 11,
     paddingVertical: 8,
     borderWidth: 1,
     borderColor: '#334155',
@@ -215,13 +220,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  iconButton: {
+  roundIconButton: {
     backgroundColor: '#111820',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#334155',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   mutedButton: {
     borderColor: '#f0c040',
@@ -233,6 +240,9 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
     fontSize: 11,
     fontWeight: '800',
+  },
+  srText: {
+    display: 'none',
   },
   meta: {
     color: '#9aa4b2',

@@ -25,11 +25,13 @@ const GRID_H_PADDING  = 24;   // total left+right padding
 const MAX_CELL_SIZE   = 54;
 const MIN_CELL_SIZE   = 32;
 
-function useCellSize(wordLength: number) {
+function useCellSize(wordLength: number, maxWidth?: number, maxHeight?: number) {
   const { width, height } = useWindowDimensions();
-  const available = width - GRID_H_PADDING * 2 - CELL_GAP * (wordLength - 1);
+  const measuredWidth = maxWidth && maxWidth > 0 ? maxWidth : width;
+  const measuredHeight = maxHeight && maxHeight > 0 ? maxHeight : height * 0.47;
+  const available = measuredWidth - GRID_H_PADDING - CELL_GAP * (wordLength - 1);
   const byWidth = Math.floor(available / wordLength);
-  const byHeight = Math.floor((height * 0.47 - CELL_GAP * (VISUAL_ROWS - 1)) / VISUAL_ROWS);
+  const byHeight = Math.floor((measuredHeight - CELL_GAP * (VISUAL_ROWS - 1) - 12) / VISUAL_ROWS);
   return Math.max(MIN_CELL_SIZE, Math.min(MAX_CELL_SIZE, byWidth, byHeight));
 }
 
@@ -42,6 +44,8 @@ interface WordGridProps {
   invalidShake:     number;
   lastSubmittedRow: number;
   maxGuesses:       number;   // 4 for Prodigy, 6 otherwise
+  maxWidth?:        number;
+  maxHeight?:       number;
 }
 
 // ── Single animated tile ──────────────────────────────────────────────────────
@@ -146,9 +150,9 @@ const Cell: React.FC<CellProps> = ({
 // ── Grid ──────────────────────────────────────────────────────────────────────
 export const WordGrid: React.FC<WordGridProps> = ({
   guesses, results, currentGuess, wordLength,
-  invalidShake, lastSubmittedRow, maxGuesses,
+  invalidShake, lastSubmittedRow, maxGuesses, maxWidth, maxHeight,
 }) => {
-  const cellSize = useCellSize(wordLength);
+  const cellSize = useCellSize(wordLength, maxWidth, maxHeight);
 
   const rows = [];
 

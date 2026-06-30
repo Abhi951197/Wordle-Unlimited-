@@ -49,6 +49,7 @@ interface AppSettings {
 
 const RECENT_ROOMS_KEY = 'word_recent_rooms';
 const SETTINGS_KEY = 'word_app_settings';
+const PLAYER_EMOJIS = ['🙂', '😎', '🔥', '🚀', '🧠', '🎯', '⭐', '👑', '🍀', '⚡'];
 
 const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info' }> = ({ message, type }) => {
   const bg = type === 'error' ? '#EF4444' : type === 'warning' ? '#FACC15' : '#16C75A';
@@ -64,11 +65,11 @@ export default function GameScreen() {
     startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame, changeRoomDifficulty,
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
-    sessionId, difficulty, roomId, playerId, roomPlayers, maxRoomPlayers, typingPlayerName, livekit, activeBoard,
+    sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
     shareRequest, stats, invalidShake, lastSubmittedRow, answer, maxGuesses, toast,
   } = useGameState();
 
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isWide = width >= 760;
   const [view, setView] = useState<AppView>('splash');
   const [selectedMode, setSelectedMode] = useState<PlayMode>('solo');
@@ -78,6 +79,9 @@ export default function GameScreen() {
   const [roomModal, setRoomModal] = useState(false);
   const [settingsModal, setSettingsModal] = useState(false);
   const [roomName, setRoomName] = useState('');
+  const [selectedEmoji, setSelectedEmoji] = useState('🙂');
+  const [nameError, setNameError] = useState('');
+  const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
   const [joinCode, setJoinCode] = useState('');
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ sound: true, vibration: true, voiceChat: true, defaultDifficulty: 'easy', theme: 'dark' });
@@ -228,12 +232,22 @@ export default function GameScreen() {
   };
 
   const createParty = async () => {
-    const created = await createRoom(difficulty, roomName);
+    if (!roomName.trim()) {
+      setNameError('Enter your name to continue');
+      return;
+    }
+    setNameError('');
+    const created = await createRoom(difficulty, roomName, selectedEmoji);
     if (created) setView('roomCreated');
   };
 
   const joinParty = async () => {
-    const joined = await joinRoom(joinCode, roomName);
+    if (!roomName.trim()) {
+      setNameError('Enter your name to continue');
+      return;
+    }
+    setNameError('');
+    const joined = await joinRoom(joinCode, roomName, selectedEmoji);
     if (joined) {
       if (joinCode.trim()) void saveRecentRoom(joinCode.trim().toUpperCase(), roomName);
       setView('party');
@@ -319,7 +333,19 @@ export default function GameScreen() {
         </View>
       )}
       {shareFromMe && <View style={styles.prompt}><Text style={styles.promptText}>Waiting for a friend to accept your board.</Text></View>}
-      <View style={styles.gridWrap}>
+      <View
+        style={styles.gridWrap}
+        onLayout={(event) => {
+          const { width: nextWidth, height: nextHeight } = event.nativeEvent.layout;
+          setGridSize({ width: nextWidth, height: nextHeight });
+        }}
+      >
+        {roomId && typingPlayerName && (
+          <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(160)} style={styles.liveCursor}>
+            <Text style={styles.liveCursorEmoji}>{typingPlayerEmoji || '🙂'}</Text>
+            <Text style={styles.liveCursorText}>{typingPlayerName}</Text>
+          </Animated.View>
+        )}
         <WordGrid
           guesses={guesses}
           results={results}
@@ -328,6 +354,8 @@ export default function GameScreen() {
           invalidShake={invalidShake}
           lastSubmittedRow={lastSubmittedRow}
           maxGuesses={maxGuesses}
+          maxWidth={gridSize.width}
+          maxHeight={gridSize.height}
         />
       </View>
       <Keyboard onKeyPress={addLetter} onEnter={submitGuess} onDelete={removeLetter} letterStates={letterStates} />
@@ -397,7 +425,23 @@ export default function GameScreen() {
           <ScrollView contentContainerStyle={styles.scrollScreen} showsVerticalScrollIndicator={false}>
             {renderTopBar('Start a Party', 'Create or join a room')}
             <Text style={styles.inputLabel}>Your name</Text>
-            <TextInput value={roomName} onChangeText={setRoomName} placeholder="Enter your name" placeholderTextColor="#64748B" style={styles.input} />
+            <TextInput
+              value={roomName}
+              onChangeText={(value) => { setRoomName(value); if (nameError) setNameError(''); }}
+              placeholder=""
+              placeholderTextColor="#64748B"
+              style={[styles.input, nameError && styles.inputError]}
+              autoCorrect={false}
+            />
+            {!!nameError && <Text style={styles.fieldError}>{nameError}</Text>}
+            <Text style={styles.inputLabel}>Profile emoji</Text>
+            <View style={styles.emojiPicker}>
+              {PLAYER_EMOJIS.map(emoji => (
+                <TouchableOpacity key={emoji} style={[styles.emojiOption, selectedEmoji === emoji && styles.emojiOptionActive]} onPress={() => setSelectedEmoji(emoji)}>
+                  <Text style={styles.emojiOptionText}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <TouchableOpacity style={[styles.primaryBtn, styles.createPartyBtn]} onPress={createParty}><Text style={styles.primaryText}>Create Party</Text></TouchableOpacity>
             <View style={styles.divider}><View style={styles.line} /><Text style={styles.dividerText}>or join a room</Text><View style={styles.line} /></View>
             <Text style={styles.inputLabel}>Room code</Text>
@@ -463,7 +507,7 @@ export default function GameScreen() {
             <View style={styles.playerStrip}>
               {roomPlayers.slice(0, 4).map((player, index) => (
                 <View key={player.player_id} style={styles.playerChip}>
-                  <View style={[styles.avatarDot, index === 0 && styles.ownerDot]} />
+                  <View style={[styles.avatarDot, index === 0 && styles.ownerDot]}><Text style={styles.avatarEmoji}>{player.player_emoji || '🙂'}</Text></View>
                   <Text style={styles.playerChipText} numberOfLines={1}>{player.player_name}</Text>
                   <View style={styles.onlineDot} />
                 </View>
@@ -510,7 +554,7 @@ export default function GameScreen() {
           <View style={styles.playerList}>
             {roomPlayers.map(player => (
               <View key={player.player_id} style={styles.playerRow}>
-                <View style={styles.avatarDot} />
+                <View style={styles.avatarDot}><Text style={styles.avatarEmoji}>{player.player_emoji || '🙂'}</Text></View>
                 <Text style={styles.playerName}>{player.player_name}{player.player_id === playerId ? ' (You)' : ''}</Text>
                 <View style={styles.onlineDot} />
               </View>
@@ -665,7 +709,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0B0F16' },
   mutedText: { color: '#9CA3AF', fontSize: 14, marginTop: 10 },
   appFrame: { flex: 1, width: '100%', maxWidth: 440, backgroundColor: '#0B0F16' },
-  appFrameWide: { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#1F2937' },
+  appFrameWide: { maxWidth: 980, borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#1F2937' },
   screen: { flex: 1, paddingHorizontal: 20, paddingBottom: 18 },
   scrollScreen: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 22 },
   centeredScreen: { justifyContent: 'center' },
@@ -713,6 +757,12 @@ const styles = StyleSheet.create({
   outlineText: { color: '#F8FAFC', fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
   inputLabel: { color: '#D1D5DB', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
   input: { minHeight: 52, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#151C27', color: '#F8FAFC', paddingHorizontal: 14, fontSize: 15, fontWeight: '800' },
+  inputError: { borderColor: '#EF4444' },
+  fieldError: { color: '#EF4444', fontSize: 12, fontWeight: '800', marginTop: 6 },
+  emojiPicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  emojiOption: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  emojiOptionActive: { borderColor: '#16C75A', backgroundColor: '#10251A' },
+  emojiOptionText: { fontSize: 18 },
   createPartyBtn: { marginTop: 14 },
   joinRow: { flexDirection: 'row', gap: 10 },
   joinInput: { flex: 1, letterSpacing: 3, textTransform: 'uppercase' },
@@ -731,12 +781,12 @@ const styles = StyleSheet.create({
   createdCode: { color: '#F8FAFC', fontSize: 30, fontWeight: '900', letterSpacing: 9 },
   waitingText: { color: '#D1D5DB', fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center', marginVertical: 8 },
   gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
-  voicePanel: { borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 9, marginBottom: 8, gap: 6 },
+  voicePanel: { width: '100%', maxWidth: 520, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 9, marginBottom: 8, gap: 6 },
   voiceLabel: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
-  playerStrip: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  playerStrip: { width: '100%', maxWidth: 520, alignSelf: 'center', flexDirection: 'row', gap: 6, marginBottom: 8 },
   playerChip: { flex: 1, minHeight: 34, borderRadius: 12, backgroundColor: '#111827', borderWidth: 1, borderColor: '#283447', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 6 },
   playerChipText: { flex: 1, color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
-  boardShell: { flex: 1, alignItems: 'center', justifyContent: 'space-between', minHeight: 0 },
+  boardShell: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', alignItems: 'center', justifyContent: 'space-between', minHeight: 0 },
   toastSlot: { height: 28, justifyContent: 'center' },
   toast: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
   toastText: { color: '#fff', fontSize: 12, fontWeight: '900' },
@@ -746,7 +796,10 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: '#16C75A' },
   segmentText: { color: '#9CA3AF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   segmentTextActive: { color: '#fff' },
-  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 206 },
+  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 186, position: 'relative' },
+  liveCursor: { position: 'absolute', right: 8, top: 8, zIndex: 3, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 10, paddingVertical: 6 },
+  liveCursorEmoji: { fontSize: 15 },
+  liveCursorText: { color: '#BFDBFE', fontSize: 11, fontWeight: '900' },
   prompt: { width: '100%', borderRadius: 14, borderWidth: 1, borderColor: '#FACC15', backgroundColor: '#2A2108', padding: 10, marginBottom: 6 },
   promptText: { color: '#FDE68A', fontWeight: '800', fontSize: 13 },
   promptRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
@@ -772,8 +825,9 @@ const styles = StyleSheet.create({
   shareLabel: { color: '#60A5FA', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
   playerList: { gap: 8 },
   playerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 38 },
-  avatarDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#8B5CF6' },
+  avatarDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#8B5CF6', alignItems: 'center', justifyContent: 'center' },
   ownerDot: { backgroundColor: '#16C75A' },
+  avatarEmoji: { fontSize: 13 },
   playerName: { flex: 1, color: '#F8FAFC', fontSize: 14, fontWeight: '800' },
   onlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#16C75A' },
   dangerBtn: { minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: '#EF4444', alignItems: 'center', justifyContent: 'center' },

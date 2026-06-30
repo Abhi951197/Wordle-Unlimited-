@@ -172,6 +172,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     playerId: null,
   });
   const currentGuessRef = useRef('');
+  const sessionIdRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
   const inputSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputSyncSeq = useRef(0);
@@ -187,6 +188,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     currentGuessRef.current = currentGuess;
   }, [currentGuess]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     AsyncStorage.getItem('word_unlimited_stats').then(val => {
@@ -295,6 +300,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setResults([]);
     setCurrentGuess('');
     currentGuessRef.current = '';
+    sessionIdRef.current = null;
     setGameStatus('playing');
     setLetterStates({});
     setHints([]);
@@ -339,22 +345,30 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const applyBoard = (board: BoardState | null) => {
     if (!board) return;
     const nextGuessCount = board.guesses?.length ?? 0;
-    const boardAdvanced = nextGuessCount !== lastGuessCountRef.current || board.session_id !== sessionId;
+    const previousSessionId = sessionIdRef.current;
+    const sessionChanged = board.session_id !== previousSessionId;
+    const guessCountChanged = nextGuessCount !== lastGuessCountRef.current;
+    const boardAdvanced = guessCountChanged || sessionChanged;
     const serverInputVersion = board.input_version ?? 0;
-    if (board.session_id !== sessionId) {
+    if (sessionChanged) {
       localDraftActiveRef.current = false;
       currentGuessRef.current = '';
     }
-    const shouldKeepLocalGuess = !!roomId
-      && board.session_id === sessionId
-      && !boardAdvanced
-      && (
-        localDraftActiveRef.current
-        || currentGuessRef.current.length > 0
-        || Date.now() - lastLocalInputAt.current < 1200
-        || serverInputVersion < localInputVersion.current
+    const shouldApplyServerGuess = !roomId || sessionChanged || guessCountChanged;
+    const shouldKeepLocalGuess = !shouldApplyServerGuess
+      || (
+        !!roomId
+        && board.session_id === previousSessionId
+        && !boardAdvanced
+        && (
+          localDraftActiveRef.current
+          || currentGuessRef.current.length > 0
+          || Date.now() - lastLocalInputAt.current < 1200
+          || serverInputVersion < localInputVersion.current
+        )
       );
     setSessionId(board.session_id);
+    sessionIdRef.current = board.session_id;
     setWordLength(board.length);
     setDifficulty(board.difficulty);
     setGuesses(board.guesses ?? []);
@@ -364,6 +378,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCurrentGuess(board.current_guess ?? '');
       currentGuessRef.current = board.current_guess ?? '';
       localInputVersion.current = Math.max(localInputVersion.current, serverInputVersion);
+      localDraftActiveRef.current = false;
+    } else if (guessCountChanged) {
+      setCurrentGuess('');
+      currentGuessRef.current = '';
       localDraftActiveRef.current = false;
     }
     setLetterStates(buildLetterStates(board.guesses ?? [], board.results ?? [], board.difficulty));

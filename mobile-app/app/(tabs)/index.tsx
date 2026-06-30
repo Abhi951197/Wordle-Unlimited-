@@ -438,16 +438,25 @@ export default function GameScreen() {
   const renderPartyActions = () => {
     if (!roomId) return null;
     const canShare = activeBoard === 'individual' && gameStatus === 'playing';
+    const latestChat = chatMessages[chatMessages.length - 1];
     return (
       <View style={[styles.partyActionStrip, themed.panel]}>
         <View style={styles.partyVoiceWrap}>
-          <Text style={[styles.voiceLabel, themed.mutedText]}>Voice Chat</Text>
           <VoiceControls livekit={livekit} compact enabled={settings.voiceChat} />
         </View>
-        <TouchableOpacity style={[styles.actionIconBtn, themed.iconBtn]} onPress={() => setChatModal(true)}>
-          <IconMark name="chat" color={palette.text} />
-          {chatMessages.length > 0 && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
-        </TouchableOpacity>
+        <View style={styles.chatPreviewWrap}>
+          <TouchableOpacity style={[styles.actionIconBtn, themed.iconBtn]} onPress={() => setChatModal(true)}>
+            <IconMark name="chat" color={palette.text} />
+            {chatMessages.length > 0 && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
+          </TouchableOpacity>
+          {!!latestChat && (
+            <TouchableOpacity style={[styles.chatPreview, themed.iconBtn]} onPress={() => setChatModal(true)} activeOpacity={0.78}>
+              <Text style={[styles.chatPreviewText, themed.bodyText]} numberOfLines={1} ellipsizeMode="tail">
+                {(latestChat.player_emoji || '🙂')} {latestChat.player_name}: {latestChat.text}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
         {canShare && (
           <TouchableOpacity style={[styles.shareBoardAction, themed.blueAction]} onPress={requestShareBoard}>
             <IconMark name="share" color="#fff" />
@@ -945,11 +954,10 @@ const StatsSummary: React.FC<{
       {!compact && <Text style={styles.avgLine}>Avg guesses per win: <Text style={{ fontWeight: '800' }}>{avgGuesses}</Text></Text>}
       {!compact && source.guessDistribution.map((count: number, idx: number) => {
       const pct = Math.max((count / maxDist) * 100, 5);
-      const isLast = gameStatus === 'won' && idx === guesses.length - 1;
       return (
         <View key={idx} style={styles.distRow}>
           <Text style={styles.distNum}>{idx + 1}</Text>
-          <View style={[styles.distBar, { width: `${pct}%` }, isLast ? { backgroundColor: '#16C75A' } : null]}><Text style={styles.distCount}>{count}</Text></View>
+          <View style={[styles.distBar, { width: `${pct}%` }]}><Text style={styles.distCount}>{count}</Text></View>
         </View>
       );
       })}
@@ -1053,9 +1061,12 @@ const styles = StyleSheet.create({
   createdCode: { color: '#F8FAFC', fontSize: 30, fontWeight: '900', letterSpacing: 9 },
   waitingText: { color: '#D1D5DB', fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center', marginVertical: 8 },
   gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
-  partyActionStrip: { width: '100%', maxWidth: 520, minHeight: 58, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 8, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  partyVoiceWrap: { flex: 1, minWidth: 0, gap: 4 },
+  partyActionStrip: { width: '100%', maxWidth: 520, minHeight: 58, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 8, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8 },
+  partyVoiceWrap: { flexShrink: 0, minWidth: 118, alignItems: 'flex-start' },
+  chatPreviewWrap: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 },
   actionIconBtn: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  chatPreview: { flex: 1, maxWidth: 190, minHeight: 36, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', justifyContent: 'center', paddingHorizontal: 10 },
+  chatPreviewText: { color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
   shareBoardAction: { minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#2563EB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   shareBoardText: { color: '#fff', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
   chatBadge: { position: 'absolute', right: -3, top: -4, minWidth: 17, height: 17, borderRadius: 9, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
@@ -1185,6 +1196,6 @@ const styles = StyleSheet.create({
   avgLine: { color: '#9CA3AF', fontSize: 13, textAlign: 'center', marginBottom: 10 },
   distRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 5 },
   distNum: { width: 18, color: '#F8FAFC', fontWeight: '900', textAlign: 'right' },
-  distBar: { height: 22, minWidth: 24, borderRadius: 5, backgroundColor: '#334155', alignItems: 'flex-end', justifyContent: 'center', paddingHorizontal: 7 },
+  distBar: { height: 22, minWidth: 24, borderRadius: 5, backgroundColor: '#16C75A', alignItems: 'flex-end', justifyContent: 'center', paddingHorizontal: 7 },
   distCount: { color: '#fff', fontWeight: '900', fontSize: 12 },
 });

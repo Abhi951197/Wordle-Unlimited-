@@ -105,6 +105,8 @@ export default function GameScreen() {
   const [settingsModal, setSettingsModal] = useState(false);
   const [emojiModal, setEmojiModal] = useState(false);
   const [chatModal, setChatModal] = useState(false);
+  const [seenChatId, setSeenChatId] = useState<string | null>(null);
+  const [chatPopupVisible, setChatPopupVisible] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [selectedEmoji, setSelectedEmoji] = useState('🙂');
   const [nameError, setNameError] = useState('');
@@ -118,6 +120,22 @@ export default function GameScreen() {
   const [showResultOverlay, setShowResultOverlay] = useState(false);
   const palette = PALETTES[settings.theme];
   const themed = useMemo(() => createThemeStyles(palette), [palette]);
+  const latestChat = chatMessages[chatMessages.length - 1];
+  const hasUnreadChat = !!latestChat && latestChat.message_id !== seenChatId;
+
+  useEffect(() => {
+    if (!latestChat || latestChat.message_id === seenChatId) return;
+    setChatPopupVisible(true);
+    const timer = setTimeout(() => setChatPopupVisible(false), 3000);
+    return () => clearTimeout(timer);
+  }, [latestChat?.message_id, seenChatId]);
+
+  useEffect(() => {
+    if (chatModal && latestChat) {
+      setSeenChatId(latestChat.message_id);
+      setChatPopupVisible(false);
+    }
+  }, [chatModal, latestChat?.message_id]);
 
   useEffect(() => {
     if (!sessionId && gameStatus === 'playing') startGame(difficulty);
@@ -240,7 +258,10 @@ export default function GameScreen() {
     const message = text.trim();
     if (!message) return;
     const sent = await sendChatMessage(message);
-    if (sent) setChatInput('');
+    if (sent) {
+      setChatInput('');
+      setChatPopupVisible(false);
+    }
   };
 
   function playFeedback(kind: 'key' | 'delete' | 'submit' | 'win', vibrate = true) {
@@ -438,29 +459,28 @@ export default function GameScreen() {
   const renderPartyActions = () => {
     if (!roomId) return null;
     const canShare = activeBoard === 'individual' && gameStatus === 'playing';
-    const latestChat = chatMessages[chatMessages.length - 1];
     return (
-      <View style={[styles.partyActionStrip, themed.panel]}>
-        <View style={styles.partyVoiceWrap}>
-          <VoiceControls livekit={livekit} compact enabled={settings.voiceChat} />
-        </View>
-        <View style={styles.chatPreviewWrap}>
+      <View style={styles.partyActionArea}>
+        <View style={[styles.partyActionStrip, themed.panel]}>
+          <View style={styles.partyVoiceWrap}>
+            <VoiceControls livekit={livekit} compact enabled={settings.voiceChat} />
+          </View>
           <TouchableOpacity style={[styles.actionIconBtn, themed.iconBtn]} onPress={() => setChatModal(true)}>
             <IconMark name="chat" color={palette.text} />
-            {chatMessages.length > 0 && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
+            {hasUnreadChat && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
           </TouchableOpacity>
-          {!!latestChat && (
-            <TouchableOpacity style={[styles.chatPreview, themed.iconBtn]} onPress={() => setChatModal(true)} activeOpacity={0.78}>
-              <Text style={[styles.chatPreviewText, themed.bodyText]} numberOfLines={1} ellipsizeMode="tail">
-                {(latestChat.player_emoji || '🙂')} {latestChat.player_name}: {latestChat.text}
-              </Text>
+          {canShare && (
+            <TouchableOpacity style={[styles.shareBoardAction, themed.blueAction]} onPress={requestShareBoard}>
+              <IconMark name="share" color="#fff" />
+              <Text style={styles.shareBoardText}>Share</Text>
             </TouchableOpacity>
           )}
         </View>
-        {canShare && (
-          <TouchableOpacity style={[styles.shareBoardAction, themed.blueAction]} onPress={requestShareBoard}>
-            <IconMark name="share" color="#fff" />
-            <Text style={styles.shareBoardText}>Share</Text>
+        {!!latestChat && chatPopupVisible && (
+          <TouchableOpacity style={[styles.chatPreviewPopup, themed.card]} onPress={() => setChatModal(true)} activeOpacity={0.86}>
+              <Text style={[styles.chatPreviewText, themed.bodyText]} numberOfLines={1} ellipsizeMode="tail">
+                {(latestChat.player_emoji || '🙂')} {latestChat.player_name}: {latestChat.text}
+              </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -1061,13 +1081,13 @@ const styles = StyleSheet.create({
   createdCode: { color: '#F8FAFC', fontSize: 30, fontWeight: '900', letterSpacing: 9 },
   waitingText: { color: '#D1D5DB', fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center', marginVertical: 8 },
   gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
-  partyActionStrip: { width: '100%', maxWidth: 520, minHeight: 58, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 8, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8 },
-  partyVoiceWrap: { flexShrink: 0, minWidth: 118, alignItems: 'flex-start' },
-  chatPreviewWrap: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 },
-  actionIconBtn: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
-  chatPreview: { flex: 1, maxWidth: 190, minHeight: 36, borderRadius: 12, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', justifyContent: 'center', paddingHorizontal: 10 },
+  partyActionArea: { width: '100%', maxWidth: 520, alignSelf: 'center', position: 'relative', marginBottom: 8 },
+  partyActionStrip: { width: '100%', minHeight: 58, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 5, overflow: 'hidden' },
+  partyVoiceWrap: { flex: 1, minWidth: 0, alignItems: 'flex-start' },
+  actionIconBtn: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  chatPreviewPopup: { position: 'absolute', left: 8, right: 8, top: 62, minHeight: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', justifyContent: 'center', paddingHorizontal: 10, zIndex: 8 },
   chatPreviewText: { color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
-  shareBoardAction: { minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#2563EB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  shareBoardAction: { minHeight: 38, maxWidth: 78, borderRadius: 13, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#2563EB', paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexShrink: 0 },
   shareBoardText: { color: '#fff', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
   chatBadge: { position: 'absolute', right: -3, top: -4, minWidth: 17, height: 17, borderRadius: 9, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
   chatBadgeText: { color: '#fff', fontSize: 9, fontWeight: '900' },

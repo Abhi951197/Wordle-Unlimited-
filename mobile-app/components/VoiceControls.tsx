@@ -185,11 +185,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
           <Text style={styles.leaveText}>Leave</Text>
         </TouchableOpacity>
       )}
-      <Text style={styles.meta}>
-        {connected
-          ? `${remoteCount + 1} in voice${audioLocked ? ' - tap Voice On' : muted ? ' - muted' : ''}`
-          : status === 'error' ? 'Voice failed' : 'Voice ready'}
-      </Text>
+      {status === 'error' && <Text style={styles.meta}>Voice failed</Text>}
     </View>
   );
 };
@@ -198,11 +194,12 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
+    flexWrap: 'nowrap',
+    gap: 5,
+    width: '100%',
   },
   compactContainer: {
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
   },
   audioHost: {
     width: 0,
@@ -215,7 +212,7 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: '#172233',
     borderRadius: 12,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 8,
     borderWidth: 1,
     borderColor: '#334155',
@@ -226,19 +223,19 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   textActionButton: {
     backgroundColor: '#111820',
-    minWidth: 58,
+    minWidth: 48,
     height: 36,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#334155',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
   },
   mutedButton: {
     borderColor: '#f0c040',
@@ -249,7 +246,7 @@ const styles = StyleSheet.create({
   },
   textActionText: {
     color: '#F8FAFC',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
   },
   mutedIconText: {
@@ -257,7 +254,7 @@ const styles = StyleSheet.create({
   },
   leaveText: {
     color: '#F8FAFC',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
   },
   meta: {

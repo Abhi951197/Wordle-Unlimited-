@@ -62,6 +62,15 @@ export interface ShareRequestState {
   created_at: string;
 }
 
+export interface ChatMessage {
+  message_id: string;
+  player_id: string;
+  player_name: string;
+  player_emoji: string;
+  text: string;
+  created_at: string;
+}
+
 export type ActiveBoard = 'shared' | 'individual';
 
 interface GameStateContextType {
@@ -81,6 +90,7 @@ interface GameStateContextType {
   sharedBoard: BoardState | null;
   individualBoard: BoardState | null;
   shareRequest: ShareRequestState | null;
+  chatMessages: ChatMessage[];
   guesses: string[];
   results: string[][];
   currentGuess: string;
@@ -97,6 +107,7 @@ interface GameStateContextType {
   setActiveBoard: (board: ActiveBoard) => Promise<void>;
   requestShareBoard: () => Promise<void>;
   respondToShareRequest: (accept: boolean) => Promise<void>;
+  sendChatMessage: (text: string) => Promise<boolean>;
   addLetter: (letter: string) => void;
   removeLetter: () => void;
   submitGuess: () => Promise<void>;
@@ -141,6 +152,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [sharedBoard, setSharedBoard] = useState<BoardState | null>(null);
   const [individualBoard, setIndividualBoard] = useState<BoardState | null>(null);
   const [shareRequest, setShareRequest] = useState<ShareRequestState | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [guesses, setGuesses] = useState<string[]>([]);
   const [results, setResults] = useState<string[][]>([]);
   const [currentGuess, setCurrentGuess] = useState('');
@@ -166,6 +178,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const lastLocalInputAt = useRef(0);
   const localInputVersion = useRef(0);
   const lastGuessCountRef = useRef(0);
+  const localDraftActiveRef = useRef(false);
 
   useEffect(() => {
     latestRoomRef.current = { roomId, playerId };
@@ -294,6 +307,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setToastState(null);
     localInputVersion.current = 0;
     lastGuessCountRef.current = 0;
+    localDraftActiveRef.current = false;
   };
 
   const buildLetterStates = (
@@ -327,11 +341,17 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const nextGuessCount = board.guesses?.length ?? 0;
     const boardAdvanced = nextGuessCount !== lastGuessCountRef.current || board.session_id !== sessionId;
     const serverInputVersion = board.input_version ?? 0;
+    if (board.session_id !== sessionId) {
+      localDraftActiveRef.current = false;
+      currentGuessRef.current = '';
+    }
     const shouldKeepLocalGuess = !!roomId
       && board.session_id === sessionId
       && !boardAdvanced
       && (
-        Date.now() - lastLocalInputAt.current < 1200
+        localDraftActiveRef.current
+        || currentGuessRef.current.length > 0
+        || Date.now() - lastLocalInputAt.current < 1200
         || serverInputVersion < localInputVersion.current
       );
     setSessionId(board.session_id);
@@ -344,6 +364,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCurrentGuess(board.current_guess ?? '');
       currentGuessRef.current = board.current_guess ?? '';
       localInputVersion.current = Math.max(localInputVersion.current, serverInputVersion);
+      localDraftActiveRef.current = false;
     }
     setLetterStates(buildLetterStates(board.guesses ?? [], board.results ?? [], board.difficulty));
     setGameStatus(board.won ? 'won' : board.game_over ? 'lost' : 'playing');
@@ -364,6 +385,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setSharedBoard(nextShared);
     setIndividualBoard(nextIndividual);
     setShareRequest(data.share_request ?? null);
+    setChatMessages(data.chat_messages ?? []);
     setTypingPlayerName(data.typing_player_id === currentPlayerId ? null : data.typing_player_name ?? null);
     setTypingPlayerEmoji(data.typing_player_id === currentPlayerId ? null : data.typing_player_emoji ?? null);
     applyBoard(active ?? {
@@ -406,6 +428,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setSharedBoard(null);
       setIndividualBoard(null);
       setShareRequest(null);
+      setChatMessages([]);
       AsyncStorage.removeItem(ROOM_STORAGE_KEY);
       setWordLength(data.length);
       setDifficulty(diff);
@@ -508,6 +531,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setSharedBoard(null);
     setIndividualBoard(null);
     setShareRequest(null);
+    setChatMessages([]);
     if (options.forgetIdentity !== false) AsyncStorage.removeItem(ROOM_STORAGE_KEY);
     startGame(difficulty);
   };
@@ -558,6 +582,25 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const respondToShareRequest = async (accept: boolean) => {
     await postRoomAction('share-request/respond', { accept });
     trackEvent('Board Share Responded', { accepted: accept });
+  };
+
+  const sendChatMessage = async (text: string) => {
+    if (!roomId || !playerId) return false;
+    try {
+      const res = await fetch(`${API_URL}/rooms/${roomId}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ player_id: playerId, text }),
+      });
+      if (!res.ok) throw new Error('chat');
+      const data = await res.json();
+      applyRoomState(data, playerId);
+      trackEvent('Chat Message Sent', { room_id: roomId });
+      return true;
+    } catch {
+      showToast('Could not send chat message', 'error');
+      return false;
+    }
   };
 
   useEffect(() => {
@@ -621,6 +664,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (guess.length < wordLength) {
       const nextGuess = guess + letter;
       currentGuessRef.current = nextGuess;
+      localDraftActiveRef.current = true;
       lastLocalInputAt.current = Date.now();
       localInputVersion.current += 1;
       setCurrentGuess(nextGuess);
@@ -632,6 +676,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (gameStatus !== 'playing') return;
     const nextGuess = currentGuessRef.current.slice(0, -1);
     currentGuessRef.current = nextGuess;
+    localDraftActiveRef.current = nextGuess.length > 0;
     lastLocalInputAt.current = Date.now();
     localInputVersion.current += 1;
     setCurrentGuess(nextGuess);
@@ -683,6 +728,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     try {
       submittingRef.current = true;
+      if (inputSyncTimer.current) clearTimeout(inputSyncTimer.current);
+      inputSyncSeq.current += 1;
       const endpoint = roomId && playerId ? `${API_URL}/rooms/${roomId}/guess` : `${API_URL}/guess`;
       const body = roomId && playerId
         ? { player_id: playerId, guess }
@@ -712,9 +759,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setLastSubmittedRow(guesses.length);
       setCurrentGuess('');
       currentGuessRef.current = '';
+      localDraftActiveRef.current = false;
       lastLocalInputAt.current = 0;
       localInputVersion.current += 1;
-      syncRoomInput('', localInputVersion.current);
 
       if (roomId) {
         applyRoomState(data, playerId);
@@ -770,10 +817,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   return (
     <GameStateContext.Provider value={{
       difficulty, wordLength, sessionId, roomId, playerId, playerName, playerEmoji,
-      roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest,
+      roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard, sharedBoard, individualBoard, shareRequest, chatMessages,
       guesses, results, currentGuess, gameStatus, letterStates, stats,
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
-      changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, addLetter, removeLetter,
+      changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
       answer, maxGuesses, toast,
     }}>

@@ -20,7 +20,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { ActiveBoard, useGameState } from '@/store/GameState';
+import { ActiveBoard, ChatMessage, useGameState } from '@/store/GameState';
 import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
@@ -45,12 +45,33 @@ interface AppSettings {
   vibration: boolean;
   voiceChat: boolean;
   defaultDifficulty: string;
-  theme: 'dark';
+  theme: 'dark' | 'light';
 }
 
 const RECENT_ROOMS_KEY = 'word_recent_rooms';
 const SETTINGS_KEY = 'word_app_settings';
 const PLAYER_EMOJIS = ['🙂', '😎', '🔥', '🚀', '🧠', '🎯', '⭐', '👑', '🍀', '⚡'];
+const EMOJI_GROUPS = [
+  ['🙂', '😀', '😄', '😎', '🤩', '😂', '🥳', '🤝'],
+  ['🔥', '🚀', '⚡', '🎯', '🏆', '⭐', '💎', '🍀'],
+  ['👑', '🧠', '🎮', '🎲', '💬', '☕', '🌙', '🌈'],
+];
+const QUICK_CHATS = ['Nice guess', 'Try vowels', 'I have an idea', 'Go for it', 'One more', 'Share board?'];
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+
+const PALETTES = {
+  dark: {
+    bg: '#0B0F16', surface: '#111827', panel: '#151C27', input: '#151C27', border: '#283447',
+    text: '#F8FAFC', muted: '#9CA3AF', subtle: '#D1D5DB', accent: '#16C75A', blue: '#60A5FA',
+    purple: '#8B5CF6', danger: '#EF4444', warning: '#FACC15', overlay: 'rgba(0,0,0,0.68)',
+  },
+  light: {
+    bg: '#F4F7FB', surface: '#FFFFFF', panel: '#FFFFFF', input: '#F8FAFC', border: '#D6DEE9',
+    text: '#111827', muted: '#64748B', subtle: '#334155', accent: '#16A34A', blue: '#2563EB',
+    purple: '#7C3AED', danger: '#DC2626', warning: '#D97706', overlay: 'rgba(15,23,42,0.26)',
+  },
+} as const;
+type Palette = (typeof PALETTES)[keyof typeof PALETTES];
 
 const ToastBanner: React.FC<{ message: string; type: 'error' | 'warning' | 'info' }> = ({ message, type }) => {
   const bg = type === 'error' ? '#EF4444' : type === 'warning' ? '#FACC15' : '#16C75A';
@@ -67,7 +88,7 @@ export default function GameScreen() {
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
-    shareRequest, stats, invalidShake, lastSubmittedRow, answer, maxGuesses, toast,
+    shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, maxGuesses, toast,
   } = useGameState();
 
   const { width, height } = useWindowDimensions();
@@ -82,15 +103,21 @@ export default function GameScreen() {
   const [helpModal, setHelpModal] = useState(false);
   const [roomModal, setRoomModal] = useState(false);
   const [settingsModal, setSettingsModal] = useState(false);
+  const [emojiModal, setEmojiModal] = useState(false);
+  const [chatModal, setChatModal] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [selectedEmoji, setSelectedEmoji] = useState('🙂');
   const [nameError, setNameError] = useState('');
+  const [recentWarning, setRecentWarning] = useState('');
   const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
   const [joinCode, setJoinCode] = useState('');
+  const [chatInput, setChatInput] = useState('');
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ sound: true, vibration: true, voiceChat: true, defaultDifficulty: 'easy', theme: 'dark' });
   const [statsTab, setStatsTab] = useState<StatsTab>('overall');
   const [showResultOverlay, setShowResultOverlay] = useState(false);
+  const palette = PALETTES[settings.theme];
+  const themed = useMemo(() => createThemeStyles(palette), [palette]);
 
   useEffect(() => {
     if (!sessionId && gameStatus === 'playing') startGame(difficulty);
@@ -174,10 +201,46 @@ export default function GameScreen() {
     await AsyncStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(merged));
   };
 
+  const removeRecentRoom = async (staleRoomId: string) => {
+    const merged = recentRooms.filter(room => room.roomId !== staleRoomId);
+    setRecentRooms(merged);
+    await AsyncStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(merged));
+  };
+
   const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  };
+
+  const checkRoomLive = async (code: string) => {
+    const normalized = code.trim().toUpperCase();
+    if (!normalized) return false;
+    try {
+      const res = await fetch(`${API_URL}/rooms/${normalized}`);
+      if (res.status === 404) return false;
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const chooseRecentRoom = async (recent: RecentRoom) => {
+    setRecentWarning('');
+    const live = await checkRoomLive(recent.roomId);
+    if (!live) {
+      await removeRecentRoom(recent.roomId);
+      setRecentWarning('This room is not live right now. Join another room.');
+      return;
+    }
+    setJoinCode(recent.roomId);
+  };
+
+  const sendChat = async (text: string) => {
+    const message = text.trim();
+    if (!message) return;
+    const sent = await sendChatMessage(message);
+    if (sent) setChatInput('');
   };
 
   function playFeedback(kind: 'key' | 'delete' | 'submit' | 'win', vibrate = true) {
@@ -228,9 +291,9 @@ export default function GameScreen() {
 
   if (!sessionId) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.center, themed.root]}>
         <ActivityIndicator size="large" color="#16C75A" />
-        <Text style={styles.mutedText}>Loading Wordle Unlimited...</Text>
+        <Text style={[styles.mutedText, themed.mutedText]}>Loading Wordle Unlimited...</Text>
       </View>
     );
   }
@@ -301,6 +364,14 @@ export default function GameScreen() {
       return;
     }
     setNameError('');
+    setRecentWarning('');
+    const targetCode = joinCode.trim().toUpperCase();
+    const live = await checkRoomLive(targetCode);
+    if (!live) {
+      if (targetCode) await removeRecentRoom(targetCode);
+      setRecentWarning('This room is not live right now. Join another room.');
+      return;
+    }
     const joined = await joinRoom(joinCode, roomName, selectedEmoji);
     if (joined) {
       if (joinCode.trim()) void saveRecentRoom(joinCode.trim().toUpperCase(), roomName);
@@ -349,20 +420,43 @@ export default function GameScreen() {
 
   const renderTopBar = (title: string, subtitle?: string, roomActions = false) => (
     <View style={styles.topBar}>
-      <TouchableOpacity style={styles.smallIconBtn} onPress={goBack}>
-        <Text style={styles.smallIconText}>{'<'}</Text>
+      <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={goBack}>
+        <Text style={[styles.smallIconText, themed.titleText]}>{'<'}</Text>
       </TouchableOpacity>
       <View style={styles.topTitleWrap}>
-        <Text style={styles.topTitle}>{title}</Text>
-        {!!subtitle && <Text style={styles.topSubtitle}>{subtitle}</Text>}
+        <Text style={[styles.topTitle, themed.titleText]}>{title}</Text>
+        {!!subtitle && <Text style={[styles.topSubtitle, themed.mutedText]}>{subtitle}</Text>}
       </View>
       <View style={styles.topActions}>
-        {roomId && roomActions && <TouchableOpacity style={styles.smallIconBtn} onPress={() => setRoomModal(true)}><Text style={styles.smallIconText}>i</Text></TouchableOpacity>}
-        <TouchableOpacity style={styles.smallIconBtn} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.smallIconBtn} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><Text style={styles.smallIconText}>...</Text></TouchableOpacity>
+        {roomId && roomActions && <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => setRoomModal(true)}><IconMark name="info" color={palette.text} /></TouchableOpacity>}
+        <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
+        <TouchableOpacity style={[styles.smallIconBtn, themed.iconBtn]} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><IconMark name="dots" color={palette.text} /></TouchableOpacity>
       </View>
     </View>
   );
+
+  const renderPartyActions = () => {
+    if (!roomId) return null;
+    const canShare = activeBoard === 'individual' && gameStatus === 'playing';
+    return (
+      <View style={[styles.partyActionStrip, themed.panel]}>
+        <View style={styles.partyVoiceWrap}>
+          <Text style={[styles.voiceLabel, themed.mutedText]}>Voice Chat</Text>
+          <VoiceControls livekit={livekit} compact enabled={settings.voiceChat} />
+        </View>
+        <TouchableOpacity style={[styles.actionIconBtn, themed.iconBtn]} onPress={() => setChatModal(true)}>
+          <IconMark name="chat" color={palette.text} />
+          {chatMessages.length > 0 && <View style={styles.chatBadge}><Text style={styles.chatBadgeText}>{Math.min(chatMessages.length, 9)}</Text></View>}
+        </TouchableOpacity>
+        {canShare && (
+          <TouchableOpacity style={[styles.shareBoardAction, themed.blueAction]} onPress={requestShareBoard}>
+            <IconMark name="share" color="#fff" />
+            <Text style={styles.shareBoardText}>Share</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
 
   const renderBoard = () => (
     <View style={styles.boardShell}>
@@ -414,22 +508,19 @@ export default function GameScreen() {
       </View>
       <Keyboard onKeyPress={handleLetterPress} onEnter={handleSubmitPress} onDelete={handleDeletePress} letterStates={letterStates} />
       {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
-      {roomId && activeBoard === 'individual' && gameStatus === 'playing' && (
-        <TouchableOpacity style={styles.inlineAction} onPress={requestShareBoard}><Text style={styles.inlineActionText}>Share My Board</Text></TouchableOpacity>
-      )}
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={[styles.appFrame, isWide && styles.appFrameWide]}>
+    <SafeAreaView style={[styles.container, themed.root]}>
+      <View style={[styles.appFrame, themed.root, isWide && styles.appFrameWide]}>
         {view === 'splash' && (
-          <View style={styles.screen}>
+          <View style={[styles.screen, themed.root]}>
             <View style={styles.splashBody}>
               {renderHeroBrand()}
               <View style={styles.splashActions}>
                 <TouchableOpacity style={styles.primaryBtn} onPress={() => setView('mode')}><Text style={styles.primaryText}>Get Started</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.outlineBtn} onPress={() => setHelpModal(true)}><Text style={styles.outlineText}>How to Play</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.outlineBtn, themed.iconBtn]} onPress={() => setHelpModal(true)}><Text style={[styles.outlineText, themed.bodyText]}>How to Play</Text></TouchableOpacity>
               </View>
             </View>
           </View>
@@ -438,8 +529,8 @@ export default function GameScreen() {
         {view === 'mode' && (
           <ScrollView contentContainerStyle={[styles.scrollScreen, styles.centeredScreen]} showsVerticalScrollIndicator={false}>
             <TouchableOpacity style={styles.floatingBack} onPress={goBack}><Text style={styles.smallIconText}>{'<'}</Text></TouchableOpacity>
-            <Text style={styles.pageTitle}>Choose Game Mode</Text>
-            <Text style={styles.pageSub}>Play your way</Text>
+            <Text style={[styles.pageTitle, themed.titleText]}>Choose Game Mode</Text>
+            <Text style={[styles.pageSub, themed.mutedText]}>Play your way</Text>
             <TouchableOpacity style={[styles.modeCard, styles.soloCard]} onPress={() => chooseMode('solo')} activeOpacity={0.82}>
               <View style={styles.modeIcon}><Text style={styles.modeIconText}>S</Text></View>
               <View style={styles.modeCopy}>
@@ -478,50 +569,48 @@ export default function GameScreen() {
         {view === 'party' && !roomId && (
           <ScrollView contentContainerStyle={styles.scrollScreen} showsVerticalScrollIndicator={false}>
             {renderTopBar('Start a Party', 'Create or join a room')}
-            <Text style={styles.inputLabel}>Your name</Text>
+            <Text style={[styles.inputLabel, themed.subtleText]}>Your name</Text>
             <TextInput
               value={roomName}
               onChangeText={(value) => { setRoomName(value); if (nameError) setNameError(''); }}
               placeholder=""
               placeholderTextColor="#64748B"
-              style={[styles.input, nameError && styles.inputError]}
+              style={[styles.input, themed.input, nameError && styles.inputError]}
               autoCorrect={false}
             />
             {!!nameError && <Text style={styles.fieldError}>{nameError}</Text>}
-            <Text style={styles.inputLabel}>Profile emoji</Text>
-            <View style={styles.emojiPicker}>
-              {PLAYER_EMOJIS.map(emoji => (
-                <TouchableOpacity key={emoji} style={[styles.emojiOption, selectedEmoji === emoji && styles.emojiOptionActive]} onPress={() => setSelectedEmoji(emoji)}>
-                  <Text style={styles.emojiOptionText}>{emoji}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <Text style={[styles.inputLabel, themed.subtleText]}>Profile emoji</Text>
+            <TouchableOpacity style={[styles.emojiPickerButton, themed.panel]} onPress={() => setEmojiModal(true)}>
+              <Text style={styles.emojiPickerButtonText}>{selectedEmoji}</Text>
+              <Text style={[styles.emojiPickerLabel, themed.subtleText]}>Choose profile emoji</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={[styles.primaryBtn, styles.createPartyBtn]} onPress={createParty}><Text style={styles.primaryText}>Create Party</Text></TouchableOpacity>
             <View style={styles.divider}><View style={styles.line} /><Text style={styles.dividerText}>or join a room</Text><View style={styles.line} /></View>
-            <Text style={styles.inputLabel}>Room code</Text>
+            <Text style={[styles.inputLabel, themed.subtleText]}>Room code</Text>
             <View style={styles.joinRow}>
               <TextInput
                 value={joinCode}
                 onChangeText={value => setJoinCode(value.toUpperCase())}
                 placeholder="ABC123"
                 placeholderTextColor="#64748B"
-                style={[styles.input, styles.joinInput]}
+                style={[styles.input, styles.joinInput, themed.input]}
                 autoCapitalize="characters"
                 autoCorrect={false}
                 maxLength={6}
               />
               <TouchableOpacity style={styles.joinBtn} onPress={joinParty}><Text style={styles.primaryText}>Join</Text></TouchableOpacity>
             </View>
-            <View style={styles.recentBox}>
-              <Text style={styles.recentTitle}>Recent rooms</Text>
+            <View style={[styles.recentBox, themed.panel]}>
+              <Text style={[styles.recentTitle, themed.titleText]}>Recent rooms</Text>
               {recentRooms.length === 0 ? (
                 <Text style={styles.recentEmpty}>Rooms you join will appear here later.</Text>
               ) : recentRooms.map(room => (
-                <TouchableOpacity key={room.roomId} style={styles.recentRow} onPress={() => setJoinCode(room.roomId)}>
-                  <Text style={styles.recentCode}>{room.roomId}</Text>
-                  <Text style={styles.recentMeta}>{room.name}</Text>
+                <TouchableOpacity key={room.roomId} style={[styles.recentRow, themed.card]} onPress={() => chooseRecentRoom(room)}>
+                  <Text style={[styles.recentCode, themed.titleText]}>{room.roomId}</Text>
+                  <Text style={[styles.recentMeta, themed.mutedText]}>{room.name}</Text>
                 </TouchableOpacity>
               ))}
+              {!!recentWarning && <Text style={styles.fieldError}>{recentWarning}</Text>}
             </View>
           </ScrollView>
         )}
@@ -545,19 +634,16 @@ export default function GameScreen() {
         )}
 
         {view === 'solo' && (
-          <View style={styles.gameScreen}>
+          <View style={[styles.gameScreen, themed.root]}>
             {renderTopBar('Solo Game', activeMeta.label)}
             {renderBoard()}
           </View>
         )}
 
         {view === 'party' && roomId && (
-          <View style={styles.gameScreen}>
+          <View style={[styles.gameScreen, themed.root]}>
             {renderTopBar(`Room ${roomId}`, roomSubtitle, true)}
-            <View style={[styles.voicePanel, isShort && styles.voicePanelCompact]}>
-              <Text style={styles.voiceLabel}>Voice Chat</Text>
-              <VoiceControls livekit={livekit} compact enabled={settings.voiceChat} />
-            </View>
+            {renderPartyActions()}
             <View style={[styles.playerStrip, isShort && styles.playerStripCompact]}>
               {roomPlayers.slice(0, isShort ? 6 : 4).map((player, index) => (
                 <View key={player.player_id} style={[styles.playerChip, isShort && styles.playerChipCompact]}>
@@ -648,8 +734,13 @@ export default function GameScreen() {
 
       <Modal visible={settingsModal} transparent animationType="fade" onRequestClose={() => setSettingsModal(false)}>
         <View style={styles.centerModal}>
-          <View style={styles.menuCard}>
-            <Text style={styles.sheetTitle}>Settings</Text>
+          <View style={[styles.menuCard, themed.card]}>
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, themed.titleText]}>Settings</Text>
+              <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setSettingsModal(false)}>
+                <IconMark name="x" color={palette.text} />
+              </TouchableOpacity>
+            </View>
             <SettingToggle label="Sound Effects" value={settings.sound} onPress={() => updateSetting('sound', !settings.sound)} />
             <SettingToggle
               label="Vibration"
@@ -659,6 +750,16 @@ export default function GameScreen() {
               onPress={() => supportsVibration && updateSetting('vibration', !settings.vibration)}
             />
             <SettingToggle label="Voice Chat" value={settings.voiceChat} onPress={() => updateSetting('voiceChat', !settings.voiceChat)} />
+            <View style={styles.settingRow}>
+              <Text style={styles.menuText}>Theme</Text>
+              <View style={styles.themeToggle}>
+                {(['dark', 'light'] as const).map(mode => (
+                  <TouchableOpacity key={mode} style={[styles.themePill, settings.theme === mode && styles.themePillActive]} onPress={() => updateSetting('theme', mode)}>
+                    <Text style={[styles.themePillText, settings.theme === mode && styles.themePillTextActive]}>{mode}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
             <View style={styles.settingRow}>
               <Text style={styles.menuText}>Default Difficulty</Text>
               <View style={styles.settingOptions}>
@@ -672,7 +773,66 @@ export default function GameScreen() {
             <TouchableOpacity style={styles.menuRow} onPress={() => { setHelpModal(true); setSettingsModal(false); }}><Text style={styles.menuText}>How to Play</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
             <TouchableOpacity style={styles.menuRow} onPress={() => { setStatsModal(true); setSettingsModal(false); }}><Text style={styles.menuText}>Statistics</Text><Text style={styles.chevron}>{'>'}</Text></TouchableOpacity>
             <TouchableOpacity style={styles.menuRow}><Text style={styles.menuText}>Achievements</Text><Text style={styles.menuMuted}>Soon</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => setSettingsModal(false)}><Text style={styles.primaryText}>Close</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={emojiModal} transparent animationType="slide" onRequestClose={() => setEmojiModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setEmojiModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
+        <View style={[styles.sheet, themed.card]}>
+          <View style={styles.sheetHeader}>
+            <Text style={[styles.sheetTitle, themed.titleText]}>Choose Emoji</Text>
+            <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setEmojiModal(false)}>
+              <IconMark name="x" color={palette.text} />
+            </TouchableOpacity>
+          </View>
+          {EMOJI_GROUPS.map((group, index) => (
+            <View key={index} style={styles.emojiGroup}>
+              {group.map(emoji => (
+                <TouchableOpacity key={emoji} style={[styles.emojiOptionLarge, selectedEmoji === emoji && styles.emojiOptionActive]} onPress={() => { setSelectedEmoji(emoji); setEmojiModal(false); }}>
+                  <Text style={styles.emojiOptionLargeText}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ))}
+        </View>
+      </Modal>
+
+      <Modal visible={chatModal} transparent animationType="slide" onRequestClose={() => setChatModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setChatModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
+        <View style={[styles.sheet, themed.card]}>
+          <View style={styles.sheetHeader}>
+            <Text style={[styles.sheetTitle, themed.titleText]}>Room Chat</Text>
+            <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setChatModal(false)}>
+              <IconMark name="x" color={palette.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.chatList} contentContainerStyle={styles.chatListContent}>
+            {chatMessages.length === 0 ? (
+              <Text style={[styles.recentEmpty, themed.mutedText]}>No messages yet.</Text>
+            ) : chatMessages.map(message => (
+              <ChatBubble key={message.message_id} message={message} mine={message.player_id === playerId} />
+            ))}
+          </ScrollView>
+          <View style={styles.quickChatRow}>
+            {QUICK_CHATS.map(text => (
+              <TouchableOpacity key={text} style={[styles.quickChatPill, themed.iconBtn]} onPress={() => sendChat(text)}>
+                <Text style={[styles.quickChatText, themed.bodyText]}>{text}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.chatInputRow}>
+            <TextInput
+              value={chatInput}
+              onChangeText={setChatInput}
+              placeholder="Message room"
+              placeholderTextColor={palette.muted}
+              style={[styles.input, styles.chatInput, themed.input]}
+              maxLength={180}
+            />
+            <TouchableOpacity style={styles.chatSendBtn} onPress={() => sendChat(chatInput)}>
+              <IconMark name="send" color="#fff" />
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -705,6 +865,36 @@ const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
     <Text style={styles.infoValue}>{value}</Text>
   </View>
 );
+
+const ChatBubble: React.FC<{ message: ChatMessage; mine: boolean }> = ({ message, mine }) => (
+  <View style={[styles.chatBubble, mine && styles.chatBubbleMine]}>
+    <Text style={styles.chatAuthor}>{message.player_emoji || '🙂'} {message.player_name}</Text>
+    <Text style={styles.chatText}>{message.text}</Text>
+  </View>
+);
+
+const IconMark: React.FC<{ name: 'dots' | 'info' | 'x' | 'chat' | 'share' | 'send'; color: string }> = ({ name, color }) => {
+  if (name === 'dots') {
+    return <View style={styles.verticalDots}>{[0, 1, 2].map(dot => <View key={dot} style={[styles.dotIcon, { backgroundColor: color }]} />)}</View>;
+  }
+  if (name === 'x') {
+    return <Text style={[styles.inlineIconText, { color }]}>×</Text>;
+  }
+  if (name === 'info') {
+    return <Text style={[styles.inlineIconText, { color }]}>i</Text>;
+  }
+  if (name === 'chat') {
+    return (
+      <View style={[styles.chatIconBox, { borderColor: color }]}>
+        <View style={[styles.chatIconTail, { borderTopColor: color }]} />
+      </View>
+    );
+  }
+  if (name === 'share') {
+    return <Text style={[styles.inlineIconText, { color }]}>↗</Text>;
+  }
+  return <Text style={[styles.inlineIconText, { color }]}>›</Text>;
+};
 
 const SettingToggle: React.FC<{ label: string; value: boolean; onPress: () => void; disabled?: boolean; note?: string }> = ({ label, value, onPress, disabled = false, note }) => (
   <TouchableOpacity style={[styles.settingRow, disabled && styles.settingDisabled]} onPress={onPress} activeOpacity={disabled ? 1 : 0.78} disabled={disabled}>
@@ -767,6 +957,19 @@ const StatsSummary: React.FC<{
   );
 };
 
+const createThemeStyles = (palette: Palette) => StyleSheet.create({
+  root: { backgroundColor: palette.bg },
+  panel: { backgroundColor: palette.surface, borderColor: palette.border },
+  card: { backgroundColor: palette.panel, borderColor: palette.border },
+  iconBtn: { backgroundColor: palette.surface, borderColor: palette.border },
+  input: { backgroundColor: palette.input, borderColor: palette.border, color: palette.text },
+  titleText: { color: palette.text },
+  bodyText: { color: palette.text },
+  mutedText: { color: palette.muted },
+  subtleText: { color: palette.subtle },
+  blueAction: { backgroundColor: palette.blue, borderColor: palette.blue },
+});
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B0F16', alignItems: 'center' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0B0F16' },
@@ -826,6 +1029,12 @@ const styles = StyleSheet.create({
   emojiOption: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   emojiOptionActive: { borderColor: '#16C75A', backgroundColor: '#10251A' },
   emojiOptionText: { fontSize: 18 },
+  emojiPickerButton: { minHeight: 52, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14 },
+  emojiPickerButtonText: { fontSize: 24 },
+  emojiPickerLabel: { color: '#D1D5DB', fontSize: 13, fontWeight: '800' },
+  emojiGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center', marginTop: 6 },
+  emojiOptionLarge: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  emojiOptionLargeText: { fontSize: 22 },
   createPartyBtn: { marginTop: 14 },
   joinRow: { flexDirection: 'row', gap: 10 },
   joinInput: { flex: 1, letterSpacing: 3, textTransform: 'uppercase' },
@@ -844,6 +1053,13 @@ const styles = StyleSheet.create({
   createdCode: { color: '#F8FAFC', fontSize: 30, fontWeight: '900', letterSpacing: 9 },
   waitingText: { color: '#D1D5DB', fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center', marginVertical: 8 },
   gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
+  partyActionStrip: { width: '100%', maxWidth: 520, minHeight: 58, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 8, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  partyVoiceWrap: { flex: 1, minWidth: 0, gap: 4 },
+  actionIconBtn: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  shareBoardAction: { minHeight: 42, borderRadius: 14, borderWidth: 1, borderColor: '#31557E', backgroundColor: '#2563EB', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  shareBoardText: { color: '#fff', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  chatBadge: { position: 'absolute', right: -3, top: -4, minWidth: 17, height: 17, borderRadius: 9, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  chatBadgeText: { color: '#fff', fontSize: 9, fontWeight: '900' },
   voicePanel: { width: '100%', maxWidth: 520, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 9, marginBottom: 8, gap: 6 },
   voicePanelCompact: { paddingVertical: 7, marginBottom: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   voiceLabel: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
@@ -878,6 +1094,8 @@ const styles = StyleSheet.create({
   typingLine: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', minHeight: 16, marginTop: 3 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   sheet: { backgroundColor: '#151C27', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, borderWidth: 1, borderColor: '#283447', gap: 12 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  closeIconBtn: { width: 38, height: 38, borderRadius: 13, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   sheetTitle: { color: '#F8FAFC', fontSize: 20, fontWeight: '900', marginBottom: 4 },
   sheetRow: { borderWidth: 1, borderColor: '#283447', borderRadius: 16, padding: 14, backgroundColor: '#111827' },
   sheetRowTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '900' },
@@ -927,6 +1145,28 @@ const styles = StyleSheet.create({
   settingOptions: { flexDirection: 'row', gap: 6 },
   settingPill: { width: 32, height: 32, borderRadius: 10, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', backgroundColor: '#151C27' },
   settingPillText: { color: '#9CA3AF', fontSize: 12, fontWeight: '900' },
+  themeToggle: { flexDirection: 'row', gap: 6 },
+  themePill: { minWidth: 58, height: 32, borderRadius: 10, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', backgroundColor: '#151C27', paddingHorizontal: 10 },
+  themePillActive: { borderColor: '#16C75A', backgroundColor: '#10251A' },
+  themePillText: { color: '#9CA3AF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  themePillTextActive: { color: '#16C75A' },
+  verticalDots: { gap: 3, alignItems: 'center', justifyContent: 'center' },
+  dotIcon: { width: 4, height: 4, borderRadius: 2 },
+  inlineIconText: { fontSize: 20, fontWeight: '900', lineHeight: 22 },
+  chatIconBox: { width: 18, height: 14, borderRadius: 5, borderWidth: 2 },
+  chatIconTail: { position: 'absolute', left: 3, bottom: -6, width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 0, borderTopWidth: 6, borderLeftColor: 'transparent' },
+  chatList: { maxHeight: 230 },
+  chatListContent: { gap: 8, paddingVertical: 4 },
+  chatBubble: { alignSelf: 'flex-start', maxWidth: '86%', borderRadius: 14, backgroundColor: '#111827', borderWidth: 1, borderColor: '#283447', paddingHorizontal: 12, paddingVertical: 9 },
+  chatBubbleMine: { alignSelf: 'flex-end', backgroundColor: '#10251A', borderColor: '#16C75A' },
+  chatAuthor: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', marginBottom: 3 },
+  chatText: { color: '#F8FAFC', fontSize: 13, fontWeight: '700', lineHeight: 18 },
+  quickChatRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  quickChatPill: { minHeight: 34, borderRadius: 999, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center' },
+  quickChatText: { color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
+  chatInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chatInput: { flex: 1, minHeight: 44 },
+  chatSendBtn: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#16C75A', alignItems: 'center', justifyContent: 'center' },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(11,15,22,0.94)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   resultCard: { width: '100%', maxWidth: 360, borderRadius: 24, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', padding: 20, gap: 12, alignItems: 'stretch' },
   resultTitle: { fontSize: 28, fontWeight: '900', textAlign: 'center' },

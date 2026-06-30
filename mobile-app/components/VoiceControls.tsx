@@ -165,27 +165,24 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
         onPress={connected ? unlockAudio : connect}
         activeOpacity={0.75}
       >
-        <Text style={styles.symbolText}>{connected ? 'ON' : 'MIC'}</Text>
-        <Text style={styles.buttonText}>{connected ? 'On' : status === 'connecting' ? '...' : 'Join'}</Text>
+        <Text style={styles.buttonText}>{connected ? 'Voice On' : status === 'connecting' ? 'Joining...' : 'Join Voice'}</Text>
       </TouchableOpacity>
       {connected && (
         <TouchableOpacity
-          style={[styles.roundIconButton, muted && styles.mutedButton]}
+          style={[styles.textActionButton, muted && styles.mutedButton]}
           onPress={toggleMute}
           activeOpacity={0.75}
         >
-          <Text style={[styles.iconText, muted && styles.mutedIconText]}>{muted ? 'OFF' : 'MIC'}</Text>
-          <Text style={styles.srText}>{muted ? 'Unmute' : 'Mute'}</Text>
+          <Text style={[styles.textActionText, muted && styles.mutedIconText]}>{muted ? 'Unmute' : 'Mute'}</Text>
         </TouchableOpacity>
       )}
       {connected && (
         <TouchableOpacity
-          style={[styles.roundIconButton, styles.leaveButton]}
+          style={[styles.textActionButton, styles.leaveButton]}
           onPress={disconnect}
           activeOpacity={0.75}
         >
-          <Text style={styles.leaveIconText}>X</Text>
-          <Text style={styles.srText}>Leave</Text>
+          <Text style={styles.leaveText}>Leave</Text>
         </TouchableOpacity>
       )}
       <Text style={styles.meta}>
@@ -232,15 +229,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  roundIconButton: {
+  textActionButton: {
     backgroundColor: '#111820',
-    minWidth: 44,
+    minWidth: 58,
     height: 36,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#334155',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 10,
   },
   mutedButton: {
     borderColor: '#f0c040',
@@ -249,26 +247,18 @@ const styles = StyleSheet.create({
     borderColor: '#e55c5c',
     backgroundColor: '#3A1015',
   },
-  symbolText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  iconText: {
+  textActionText: {
     color: '#F8FAFC',
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '900',
   },
   mutedIconText: {
     color: '#FACC15',
   },
-  leaveIconText: {
+  leaveText: {
     color: '#F8FAFC',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
-  },
-  srText: {
-    display: 'none',
   },
   meta: {
     color: '#9aa4b2',

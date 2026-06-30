@@ -17,15 +17,15 @@ const ROWS = [
 const KEY_BG: Record<string, string> = {
   correct: '#16a34a',
   present: '#facc15',
-  absent: '#64748b',
+  absent: '#101820',
   banned: '#101820',
-  empty: '#233446',
+  empty: '#64748b',
 };
 
 const KEY_TEXT: Record<string, string> = {
   correct: '#ffffff',
   present: '#111827',
-  absent: '#ffffff',
+  absent: '#475569',
   banned: '#475569',
   empty: '#ffffff',
 };

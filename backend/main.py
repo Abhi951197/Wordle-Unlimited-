@@ -89,10 +89,22 @@ class ShareRequestRespond(BaseModel):
     player_id: str
     accept: bool
 
+class RoomChatRequest(BaseModel):
+    player_id: str
+    text: str
+
 class LiveKitInfo(BaseModel):
     configured: bool
     url: str | None = None
     token: str | None = None
+
+class ChatMessage(BaseModel):
+    message_id: str
+    player_id: str
+    player_name: str
+    player_emoji: str
+    text: str
+    created_at: str
 
 class RoomPlayer(BaseModel):
     player_id: str
@@ -141,6 +153,7 @@ class RoomStateResponse(BaseModel):
     shared_board: BoardState | None = None
     individual_board: BoardState | None = None
     share_request: ShareRequestState | None = None
+    chat_messages: list[ChatMessage] = []
     max_players: int = MAX_ROOM_PLAYERS
     typing_player_id: str | None = None
     typing_player_name: str | None = None
@@ -314,6 +327,7 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         shared_board=_board_state(shared_session_id),
         individual_board=_board_state(individual_session_id),
         share_request=room.get("share_request"),
+        chat_messages=room.get("chat_messages", []),
         max_players=MAX_ROOM_PLAYERS,
         typing_player_id=session.get("typing_player_id"),
         typing_player_name=session.get("typing_player_name"),
@@ -408,6 +422,7 @@ def create_room(req: RoomCreateRequest):
         "player_sessions": {player_id: individual_session_id},
         "player_active_boards": {player_id: "shared"},
         "share_request": None,
+        "chat_messages": [],
         "created_at": _now_iso(),
         "players": {
             player_id: {
@@ -567,6 +582,30 @@ def respond_share_request(room_id: str, req: ShareRequestRespond):
         for player_id in room["players"]:
             room["player_active_boards"][player_id] = "shared"
     room["share_request"] = None
+    _touch_room(room, req.player_id)
+    return _room_state(room_id, req.player_id)
+
+@app.post("/rooms/{room_id}/chat", response_model=RoomStateResponse)
+def send_room_chat(room_id: str, req: RoomChatRequest):
+    room_id = room_id.strip().upper()
+    room = _require_room_player(room_id, req.player_id)
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message is required")
+    if len(text) > 180:
+        raise HTTPException(status_code=400, detail="Message is too long")
+
+    player = room["players"][req.player_id]
+    message = ChatMessage(
+        message_id=str(uuid.uuid4()),
+        player_id=req.player_id,
+        player_name=player["player_name"],
+        player_emoji=player.get("player_emoji", "🙂"),
+        text=text,
+        created_at=_now_iso(),
+    )
+    room.setdefault("chat_messages", []).append(message.model_dump())
+    room["chat_messages"] = room["chat_messages"][-50:]
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
 

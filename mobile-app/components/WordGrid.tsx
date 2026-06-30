@@ -9,8 +9,8 @@ import Animated, {
 const COLORS = {
   correct:      { bg: '#2f8d46', border: '#2f8d46' },
   present:      { bg: '#d6a524', border: '#d6a524' },
-  absent:       { bg: '#3b4652', border: '#3b4652' },
-  empty:        { bg: '#0b1219', border: '#2a3544' },
+  absent:       { bg: '#0b1219', border: '#0b1219' },
+  empty:        { bg: '#3b4652', border: '#2a3544' },
   locked:       { bg: '#111820', border: '#18212b' },
   filledBorder: '#5a6573',
 } as const;

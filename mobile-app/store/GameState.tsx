@@ -46,6 +46,7 @@ export interface BoardState {
   guesses: string[];
   results: string[][];
   current_guess: string;
+  input_version?: number;
   game_over: boolean;
   won: boolean;
   answer?: string | null;
@@ -89,7 +90,7 @@ interface GameStateContextType {
   startGame: (difficulty: string) => Promise<void>;
   createRoom: (difficulty: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
   joinRoom: (roomId: string, playerName: string, playerEmoji?: string) => Promise<boolean>;
-  leaveRoom: () => void;
+  leaveRoom: (options?: { forgetIdentity?: boolean }) => void;
   createSharedGame: () => Promise<void>;
   createIndividualGame: () => Promise<void>;
   changeRoomDifficulty: (difficulty: string) => Promise<void>;
@@ -163,6 +164,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const inputSyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputSyncSeq = useRef(0);
   const lastLocalInputAt = useRef(0);
+  const localInputVersion = useRef(0);
+  const lastGuessCountRef = useRef(0);
 
   useEffect(() => {
     latestRoomRef.current = { roomId, playerId };
@@ -203,7 +206,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setPlayerId(data.player_id);
         setPlayerName(saved.playerName || 'Player');
         setPlayerEmoji(saved.playerEmoji || '🙂');
-        applyRoomState(data);
+        applyRoomState(data, data.player_id);
       } catch {
         await AsyncStorage.removeItem(ROOM_STORAGE_KEY);
       }
@@ -289,6 +292,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setTypingPlayerName(null);
     setTypingPlayerEmoji(null);
     setToastState(null);
+    localInputVersion.current = 0;
+    lastGuessCountRef.current = 0;
   };
 
   const buildLetterStates = (
@@ -319,24 +324,33 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const applyBoard = (board: BoardState | null) => {
     if (!board) return;
+    const nextGuessCount = board.guesses?.length ?? 0;
+    const boardAdvanced = nextGuessCount !== lastGuessCountRef.current || board.session_id !== sessionId;
+    const serverInputVersion = board.input_version ?? 0;
     const shouldKeepLocalGuess = !!roomId
       && board.session_id === sessionId
-      && Date.now() - lastLocalInputAt.current < 900;
+      && !boardAdvanced
+      && (
+        Date.now() - lastLocalInputAt.current < 1200
+        || serverInputVersion < localInputVersion.current
+      );
     setSessionId(board.session_id);
     setWordLength(board.length);
     setDifficulty(board.difficulty);
     setGuesses(board.guesses ?? []);
     setResults(board.results ?? []);
+    lastGuessCountRef.current = nextGuessCount;
     if (!shouldKeepLocalGuess) {
       setCurrentGuess(board.current_guess ?? '');
       currentGuessRef.current = board.current_guess ?? '';
+      localInputVersion.current = Math.max(localInputVersion.current, serverInputVersion);
     }
     setLetterStates(buildLetterStates(board.guesses ?? [], board.results ?? [], board.difficulty));
     setGameStatus(board.won ? 'won' : board.game_over ? 'lost' : 'playing');
     setAnswer(board.answer ?? null);
   };
 
-  const applyRoomState = (data: any) => {
+  const applyRoomState = (data: any, currentPlayerId = playerId) => {
     const boardMode: ActiveBoard = data.active_board === 'individual' ? 'individual' : 'shared';
     const nextShared = data.shared_board ?? null;
     const nextIndividual = data.individual_board ?? null;
@@ -350,8 +364,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setSharedBoard(nextShared);
     setIndividualBoard(nextIndividual);
     setShareRequest(data.share_request ?? null);
-    setTypingPlayerName(data.typing_player_id === playerId ? null : data.typing_player_name ?? null);
-    setTypingPlayerEmoji(data.typing_player_id === playerId ? null : data.typing_player_emoji ?? null);
+    setTypingPlayerName(data.typing_player_id === currentPlayerId ? null : data.typing_player_name ?? null);
+    setTypingPlayerEmoji(data.typing_player_id === currentPlayerId ? null : data.typing_player_emoji ?? null);
     applyBoard(active ?? {
       session_id: data.session_id,
       difficulty: data.difficulty,
@@ -359,6 +373,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       guesses: data.guesses ?? [],
       results: data.results ?? [],
       current_guess: data.current_guess ?? '',
+      input_version: data.input_version ?? 0,
       game_over: data.game_over,
       won: data.won,
       answer: data.answer,
@@ -417,7 +432,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setPlayerEmoji(emoji);
       await persistRoom(data, cleanName, emoji);
       resetBoardState();
-      applyRoomState(data);
+      applyRoomState(data, data.player_id);
       showToast(`Room ${data.room_id} is ready`, 'info');
       trackEvent('Room Created', { difficulty: diff });
       return true;
@@ -435,10 +450,23 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
 
     try {
+      let reusePlayerId = playerId;
+      try {
+        const savedValue = await AsyncStorage.getItem(ROOM_STORAGE_KEY);
+        if (savedValue) {
+          const saved = JSON.parse(savedValue);
+          if (saved.roomId === normalizedCode && saved.playerId) {
+            reusePlayerId = saved.playerId;
+          }
+        }
+      } catch {
+        // Rejoin can continue without saved identity.
+      }
+
       const res = await fetch(`${API_URL}/rooms/${normalizedCode}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_id: playerId, player_name: name, player_emoji: emoji }),
+        body: JSON.stringify({ player_id: reusePlayerId, player_name: name, player_emoji: emoji }),
       });
       if (res.status === 404) {
         showToast('Room not found', 'error');
@@ -457,7 +485,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setPlayerEmoji(emoji);
       await persistRoom(data, cleanName, emoji);
       resetBoardState();
-      applyRoomState(data);
+      applyRoomState(data, data.player_id);
       showToast(`Joined room ${data.room_id}`, 'info');
       trackEvent('Room Joined', { room_id: data.room_id });
       return true;
@@ -467,7 +495,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const leaveRoom = () => {
+  const leaveRoom = (options: { forgetIdentity?: boolean } = { forgetIdentity: true }) => {
     setRoomId(null);
     setPlayerId(null);
     setPlayerEmoji('🙂');
@@ -480,7 +508,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setSharedBoard(null);
     setIndividualBoard(null);
     setShareRequest(null);
-    AsyncStorage.removeItem(ROOM_STORAGE_KEY);
+    if (options.forgetIdentity !== false) AsyncStorage.removeItem(ROOM_STORAGE_KEY);
     startGame(difficulty);
   };
 
@@ -495,7 +523,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!res.ok) throw new Error(path);
       const data = await res.json();
       resetBoardState();
-      applyRoomState(data);
+      applyRoomState(data, playerId);
     } catch {
       showToast('Could not update room', 'error');
     }
@@ -540,7 +568,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const res = await fetch(`${API_URL}/rooms/${roomId}?player_id=${playerId}`);
         if (!res.ok) return;
         const data = await res.json();
-        applyRoomState(data);
+        applyRoomState(data, playerId);
       } catch {
         // Transient polling failures should not interrupt the local UI.
       }
@@ -562,7 +590,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const syncRoomInput = (nextGuess: string) => {
+  const syncRoomInput = (nextGuess: string, version = localInputVersion.current) => {
     const activeRoomId = latestRoomRef.current.roomId;
     const activePlayerId = latestRoomRef.current.playerId;
     if (!activeRoomId || !activePlayerId) return;
@@ -578,6 +606,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           body: JSON.stringify({
             player_id: activePlayerId,
             current_guess: nextGuess,
+            client_input_version: version,
           }),
         });
       } catch {
@@ -593,8 +622,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const nextGuess = guess + letter;
       currentGuessRef.current = nextGuess;
       lastLocalInputAt.current = Date.now();
+      localInputVersion.current += 1;
       setCurrentGuess(nextGuess);
-      syncRoomInput(nextGuess);
+      syncRoomInput(nextGuess, localInputVersion.current);
     }
   };
 
@@ -603,8 +633,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const nextGuess = currentGuessRef.current.slice(0, -1);
     currentGuessRef.current = nextGuess;
     lastLocalInputAt.current = Date.now();
+    localInputVersion.current += 1;
     setCurrentGuess(nextGuess);
-    syncRoomInput(nextGuess);
+    syncRoomInput(nextGuess, localInputVersion.current);
   };
 
   const submitGuess = async () => {
@@ -682,10 +713,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCurrentGuess('');
       currentGuessRef.current = '';
       lastLocalInputAt.current = 0;
-      syncRoomInput('');
+      localInputVersion.current += 1;
+      syncRoomInput('', localInputVersion.current);
 
       if (roomId) {
-        applyRoomState(data);
+        applyRoomState(data, playerId);
         trackEvent('Guess Submitted', { mode: 'party', difficulty, guess_count: guesses.length + 1 });
         if (data.won) trackEvent('Game Won', { mode: 'party', difficulty, guesses: guesses.length + 1 });
         else if (data.game_over) trackEvent('Game Lost', { mode: 'party', difficulty, guesses: guesses.length + 1 });

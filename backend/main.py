@@ -72,6 +72,7 @@ class RoomGuessRequest(BaseModel):
 class RoomInputRequest(BaseModel):
     player_id: str
     current_guess: str
+    client_input_version: int | None = None
 
 class RoomDifficultyRequest(BaseModel):
     player_id: str
@@ -107,6 +108,7 @@ class BoardState(BaseModel):
     guesses: list[str]
     results: list[list[str]]
     current_guess: str = ""
+    input_version: int = 0
     game_over: bool
     won: bool
     answer: str | None = None
@@ -128,6 +130,7 @@ class RoomStateResponse(BaseModel):
     guesses: list[str]
     results: list[list[str]]
     current_guess: str = ""
+    input_version: int = 0
     game_over: bool
     won: bool
     answer: str | None = None
@@ -211,6 +214,7 @@ def _create_session(difficulty: str) -> str:
         "guesses": [],
         "results": [],
         "current_guess": "",
+        "input_version": 0,
         "game_over": False,
         "won": False,
         "typing_player_id": None,
@@ -231,6 +235,7 @@ def _board_state(session_id: str | None) -> BoardState | None:
         guesses=session["guesses"],
         results=session["results"],
         current_guess=session.get("current_guess", ""),
+        input_version=session.get("input_version", 0),
         game_over=session["game_over"],
         won=session["won"],
         answer=session["word"] if session["game_over"] and not session["won"] else None,
@@ -298,6 +303,7 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         guesses=session["guesses"],
         results=session["results"],
         current_guess=session.get("current_guess", ""),
+        input_version=session.get("input_version", 0),
         game_over=session["game_over"],
         won=session["won"],
         answer=session["word"] if session["game_over"] and not session["won"] else None,
@@ -355,6 +361,7 @@ def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
     session["guesses"].append(guess)
     session["results"].append(states)
     session["current_guess"] = ""
+    session["input_version"] = session.get("input_version", 0) + 1
     session["typing_player_id"] = None
     session["typing_player_name"] = None
     session["typing_player_emoji"] = None
@@ -467,6 +474,10 @@ def update_room_input(room_id: str, req: RoomInputRequest):
 
     if not session.get("game_over"):
         session["current_guess"] = guess
+        server_version = session.get("input_version", 0) + 1
+        if req.client_input_version is not None:
+            server_version = max(server_version, req.client_input_version)
+        session["input_version"] = server_version
         if guess:
             session["typing_player_id"] = req.player_id
             session["typing_player_name"] = room["players"][req.player_id]["player_name"]

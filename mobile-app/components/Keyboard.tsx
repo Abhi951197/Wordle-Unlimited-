@@ -35,18 +35,18 @@ export const Keyboard: React.FC<KeyboardProps> = ({
 }) => {
   const { width, height } = useWindowDimensions();
   const keyboardWidth = Math.min(width - 16, 420);
-  const keyGap = 5;
+  const keyGap = width < 380 ? 4 : 5;
   const wideRatio = 1.65;
   const rowOneFit = (keyboardWidth - keyGap * 9) / 10;
   const actionRowFit = (keyboardWidth - keyGap * 8) / (7 + wideRatio * 2);
-  const normalKeyWidth = Math.max(27, Math.floor(Math.min(rowOneFit, actionRowFit)));
-  const keyHeight = Math.max(46, Math.min(58, Math.floor(height * 0.068)));
-  const wideKeyWidth = Math.max(58, Math.floor(normalKeyWidth * wideRatio));
+  const normalKeyWidth = Math.max(26, Math.floor(Math.min(rowOneFit, actionRowFit)));
+  const keyHeight = Math.max(38, Math.min(54, Math.floor(height * 0.058)));
+  const wideKeyWidth = Math.max(54, Math.floor(normalKeyWidth * wideRatio));
 
   return (
     <View style={[styles.keyboard, { maxWidth: keyboardWidth }]}>
       {ROWS.map((row, rowIndex) => (
-        <View key={rowIndex} style={styles.row}>
+        <View key={rowIndex} style={[styles.row, { gap: keyGap }]}>
           {row.map((key) => {
             const isEnter = key === 'ENTER';
             const isDel = key === 'DEL';
@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 420,
     alignItems: 'center',
-    gap: 7,
+    gap: 6,
     paddingBottom: 4,
   },
   row: {

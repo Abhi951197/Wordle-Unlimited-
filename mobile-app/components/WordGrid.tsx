@@ -21,9 +21,9 @@ const IS_WEB = Platform.OS === 'web';
 
 // ── Cell sizes ───────────────────────────────────────────────────────────────
 const CELL_GAP        = 6;
-const GRID_H_PADDING  = 24;   // total left+right padding
+const GRID_H_PADDING  = 18;   // total left+right padding
 const MAX_CELL_SIZE   = 54;
-const MIN_CELL_SIZE   = 32;
+const MIN_CELL_SIZE   = 28;
 
 function useCellSize(wordLength: number, maxWidth?: number, maxHeight?: number) {
   const { width, height } = useWindowDimensions();

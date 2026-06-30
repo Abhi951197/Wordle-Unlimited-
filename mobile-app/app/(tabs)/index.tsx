@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
@@ -71,6 +72,9 @@ export default function GameScreen() {
 
   const { width, height } = useWindowDimensions();
   const isWide = width >= 760;
+  const isShort = height < 740;
+  const supportsVibration = Platform.OS !== 'web'
+    || (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function');
   const [view, setView] = useState<AppView>('splash');
   const [selectedMode, setSelectedMode] = useState<PlayMode>('solo');
   const [diffModal, setDiffModal] = useState(false);
@@ -122,6 +126,7 @@ export default function GameScreen() {
       setShowResultOverlay(false);
       return;
     }
+    playFeedback(gameStatus === 'won' ? 'win' : 'submit', false);
     const timer = setTimeout(() => setShowResultOverlay(true), 1000);
     return () => clearTimeout(timer);
   }, [gameStatus, sessionId]);
@@ -140,18 +145,21 @@ export default function GameScreen() {
       if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
       if (event.key === 'Backspace') {
         event.preventDefault();
+        playFeedback('delete');
         removeLetter();
       } else if (event.key === 'Enter') {
         event.preventDefault();
-        submitGuess();
+        playFeedback('submit');
+        void submitGuess();
       } else if (/^[a-zA-Z]$/.test(event.key)) {
         event.preventDefault();
+        playFeedback('key');
         addLetter(event.key.toUpperCase());
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [view, gameStatus, addLetter, removeLetter, submitGuess]);
+  }, [view, gameStatus, settings.sound, settings.vibration, addLetter, removeLetter, submitGuess]);
 
   const activeMeta = DIFF_META[difficulty] ?? DIFF_META.easy;
   const shareFromMe = shareRequest?.from_player_id === playerId;
@@ -170,6 +178,52 @@ export default function GameScreen() {
     const next = { ...settings, [key]: value };
     setSettings(next);
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  };
+
+  function playFeedback(kind: 'key' | 'delete' | 'submit' | 'win', vibrate = true) {
+    if (settings.sound && Platform.OS === 'web' && typeof window !== 'undefined') {
+      try {
+        const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextCtor) {
+          const ctx = new AudioContextCtor();
+          const oscillator = ctx.createOscillator();
+          const gain = ctx.createGain();
+          const duration = kind === 'win' ? 0.22 : 0.055;
+          oscillator.frequency.value = kind === 'win' ? 740 : kind === 'submit' ? 420 : 260;
+          oscillator.type = 'sine';
+          gain.gain.value = kind === 'win' ? 0.06 : 0.035;
+          oscillator.connect(gain);
+          gain.connect(ctx.destination);
+          oscillator.start();
+          oscillator.stop(ctx.currentTime + duration);
+          setTimeout(() => ctx.close?.(), (duration + 0.05) * 1000);
+        }
+      } catch {
+        // Sound is a preference, so failures should stay invisible.
+      }
+    }
+
+    if (!vibrate || !settings.vibration) return;
+    if (Platform.OS === 'web') {
+      navigator?.vibrate?.(kind === 'submit' ? 24 : 10);
+      return;
+    }
+    void Haptics.impactAsync(kind === 'submit' ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light);
+  }
+
+  const handleLetterPress = (letter: string) => {
+    playFeedback('key');
+    addLetter(letter);
+  };
+
+  const handleDeletePress = () => {
+    playFeedback('delete');
+    removeLetter();
+  };
+
+  const handleSubmitPress = () => {
+    playFeedback('submit');
+    void submitGuess();
   };
 
   if (!sessionId) {
@@ -305,7 +359,7 @@ export default function GameScreen() {
       <View style={styles.topActions}>
         {roomId && roomActions && <TouchableOpacity style={styles.smallIconBtn} onPress={() => setRoomModal(true)}><Text style={styles.smallIconText}>i</Text></TouchableOpacity>}
         <TouchableOpacity style={styles.smallIconBtn} onPress={() => setDiffModal(true)}><Text style={[styles.smallIconText, { color: activeMeta.color }]}>{activeMeta.mark}</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.smallIconBtn} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><Text style={styles.smallIconText}>S</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.smallIconBtn} onPress={() => { trackEvent('Settings Opened'); setSettingsModal(true); }}><Text style={styles.smallIconText}>...</Text></TouchableOpacity>
       </View>
     </View>
   );
@@ -358,7 +412,7 @@ export default function GameScreen() {
           maxHeight={gridSize.height}
         />
       </View>
-      <Keyboard onKeyPress={addLetter} onEnter={submitGuess} onDelete={removeLetter} letterStates={letterStates} />
+      <Keyboard onKeyPress={handleLetterPress} onEnter={handleSubmitPress} onDelete={handleDeletePress} letterStates={letterStates} />
       {roomId && <Text style={styles.typingLine}>{typingPlayerName ? `${typingPlayerName} is typing...` : activeBoard === 'shared' ? 'Shared board ready' : 'Your private board'}</Text>}
       {roomId && activeBoard === 'individual' && gameStatus === 'playing' && (
         <TouchableOpacity style={styles.inlineAction} onPress={requestShareBoard}><Text style={styles.inlineActionText}>Share My Board</Text></TouchableOpacity>
@@ -500,15 +554,15 @@ export default function GameScreen() {
         {view === 'party' && roomId && (
           <View style={styles.gameScreen}>
             {renderTopBar(`Room ${roomId}`, roomSubtitle, true)}
-            <View style={styles.voicePanel}>
+            <View style={[styles.voicePanel, isShort && styles.voicePanelCompact]}>
               <Text style={styles.voiceLabel}>Voice Chat</Text>
-              <VoiceControls livekit={livekit} compact />
+              <VoiceControls livekit={livekit} compact enabled={settings.voiceChat} />
             </View>
-            <View style={styles.playerStrip}>
-              {roomPlayers.slice(0, 4).map((player, index) => (
-                <View key={player.player_id} style={styles.playerChip}>
+            <View style={[styles.playerStrip, isShort && styles.playerStripCompact]}>
+              {roomPlayers.slice(0, isShort ? 6 : 4).map((player, index) => (
+                <View key={player.player_id} style={[styles.playerChip, isShort && styles.playerChipCompact]}>
                   <View style={[styles.avatarDot, index === 0 && styles.ownerDot]}><Text style={styles.avatarEmoji}>{player.player_emoji || '🙂'}</Text></View>
-                  <Text style={styles.playerChipText} numberOfLines={1}>{player.player_name}</Text>
+                  {!isShort && <Text style={styles.playerChipText} numberOfLines={1}>{player.player_name}</Text>}
                   <View style={styles.onlineDot} />
                 </View>
               ))}
@@ -597,7 +651,13 @@ export default function GameScreen() {
           <View style={styles.menuCard}>
             <Text style={styles.sheetTitle}>Settings</Text>
             <SettingToggle label="Sound Effects" value={settings.sound} onPress={() => updateSetting('sound', !settings.sound)} />
-            <SettingToggle label="Vibration" value={settings.vibration} onPress={() => updateSetting('vibration', !settings.vibration)} />
+            <SettingToggle
+              label="Vibration"
+              value={settings.vibration && supportsVibration}
+              disabled={!supportsVibration}
+              note={!supportsVibration ? 'Not supported on this device/browser' : undefined}
+              onPress={() => supportsVibration && updateSetting('vibration', !settings.vibration)}
+            />
             <SettingToggle label="Voice Chat" value={settings.voiceChat} onPress={() => updateSetting('voiceChat', !settings.voiceChat)} />
             <View style={styles.settingRow}>
               <Text style={styles.menuText}>Default Difficulty</Text>
@@ -646,9 +706,12 @@ const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
   </View>
 );
 
-const SettingToggle: React.FC<{ label: string; value: boolean; onPress: () => void }> = ({ label, value, onPress }) => (
-  <TouchableOpacity style={styles.settingRow} onPress={onPress} activeOpacity={0.78}>
-    <Text style={styles.menuText}>{label}</Text>
+const SettingToggle: React.FC<{ label: string; value: boolean; onPress: () => void; disabled?: boolean; note?: string }> = ({ label, value, onPress, disabled = false, note }) => (
+  <TouchableOpacity style={[styles.settingRow, disabled && styles.settingDisabled]} onPress={onPress} activeOpacity={disabled ? 1 : 0.78} disabled={disabled}>
+    <View style={styles.settingCopy}>
+      <Text style={styles.menuText}>{label}</Text>
+      {!!note && <Text style={styles.settingNote}>{note}</Text>}
+    </View>
     <View style={[styles.toggleTrack, value && styles.toggleTrackOn]}>
       <View style={[styles.toggleThumb, value && styles.toggleThumbOn]} />
     </View>
@@ -780,23 +843,26 @@ const styles = StyleSheet.create({
   createdCodeBox: { minHeight: 78, borderRadius: 16, backgroundColor: '#151C27', borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center' },
   createdCode: { color: '#F8FAFC', fontSize: 30, fontWeight: '900', letterSpacing: 9 },
   waitingText: { color: '#D1D5DB', fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center', marginVertical: 8 },
-  gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
+  gameScreen: { flex: 1, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
   voicePanel: { width: '100%', maxWidth: 520, alignSelf: 'center', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 16, padding: 9, marginBottom: 8, gap: 6 },
+  voicePanelCompact: { paddingVertical: 7, marginBottom: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   voiceLabel: { color: '#9CA3AF', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
   playerStrip: { width: '100%', maxWidth: 520, alignSelf: 'center', flexDirection: 'row', gap: 6, marginBottom: 8 },
+  playerStripCompact: { marginBottom: 4, justifyContent: 'center' },
   playerChip: { flex: 1, minHeight: 34, borderRadius: 12, backgroundColor: '#111827', borderWidth: 1, borderColor: '#283447', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 6 },
+  playerChipCompact: { flex: 0, width: 45, minHeight: 32, justifyContent: 'center', paddingHorizontal: 5 },
   playerChipText: { flex: 1, color: '#F8FAFC', fontSize: 11, fontWeight: '800' },
-  boardShell: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', alignItems: 'center', justifyContent: 'space-between', minHeight: 0 },
-  toastSlot: { height: 28, justifyContent: 'center' },
+  boardShell: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', alignItems: 'center', justifyContent: 'flex-start', minHeight: 0 },
+  toastSlot: { height: 24, justifyContent: 'center' },
   toast: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
   toastText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   warningToastText: { color: '#111827' },
-  segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 2 },
-  segmentBtn: { paddingVertical: 8, paddingHorizontal: 20, borderRadius: 11 },
+  segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 8, zIndex: 4 },
+  segmentBtn: { paddingVertical: 7, paddingHorizontal: 18, borderRadius: 11 },
   segmentActive: { backgroundColor: '#16C75A' },
   segmentText: { color: '#9CA3AF', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   segmentTextActive: { color: '#fff' },
-  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 186, position: 'relative' },
+  gridWrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 150, position: 'relative' },
   liveCursor: { position: 'absolute', right: 8, top: 8, zIndex: 3, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 10, paddingVertical: 6 },
   liveCursorEmoji: { fontSize: 15 },
   liveCursorText: { color: '#BFDBFE', fontSize: 11, fontWeight: '900' },
@@ -809,7 +875,7 @@ const styles = StyleSheet.create({
   ghostText: { color: '#F8FAFC', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
   inlineAction: { marginTop: 8, minHeight: 40, borderRadius: 13, backgroundColor: '#10243A', borderWidth: 1, borderColor: '#31557E', paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
   inlineActionText: { color: '#60A5FA', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
-  typingLine: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', minHeight: 18, marginTop: 4 },
+  typingLine: { color: '#9CA3AF', fontSize: 11, fontWeight: '800', minHeight: 16, marginTop: 3 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   sheet: { backgroundColor: '#151C27', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, borderWidth: 1, borderColor: '#283447', gap: 12 },
   sheetTitle: { color: '#F8FAFC', fontSize: 20, fontWeight: '900', marginBottom: 4 },
@@ -851,6 +917,9 @@ const styles = StyleSheet.create({
   menuMuted: { color: '#9CA3AF', fontSize: 12, fontWeight: '900' },
   chevron: { color: '#9CA3AF', fontSize: 16, fontWeight: '900' },
   settingRow: { minHeight: 52, borderRadius: 14, backgroundColor: '#111827', borderWidth: 1, borderColor: '#283447', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  settingDisabled: { opacity: 0.58 },
+  settingCopy: { flex: 1, gap: 3 },
+  settingNote: { color: '#9CA3AF', fontSize: 11, fontWeight: '700' },
   toggleTrack: { width: 46, height: 26, borderRadius: 999, backgroundColor: '#334155', padding: 3, justifyContent: 'center' },
   toggleTrackOn: { backgroundColor: '#16C75A' },
   toggleThumb: { width: 20, height: 20, borderRadius: 999, backgroundColor: '#F8FAFC' },

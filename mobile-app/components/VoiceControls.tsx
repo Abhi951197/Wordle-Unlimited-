@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Room, RoomEvent, Track, createLocalAudioTrack } from 'livekit-client';
 import type { LocalAudioTrack } from 'livekit-client';
 import type { LiveKitSession } from '@/store/GameState';
@@ -8,9 +7,10 @@ import type { LiveKitSession } from '@/store/GameState';
 interface VoiceControlsProps {
   livekit: LiveKitSession | null;
   compact?: boolean;
+  enabled?: boolean;
 }
 
-export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact = false }) => {
+export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact = false, enabled = true }) => {
   const roomRef = useRef<Room | null>(null);
   const audioTrackRef = useRef<LocalAudioTrack | null>(null);
   const audioHostRef = useRef<any>(null);
@@ -38,6 +38,18 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
   };
 
   useEffect(() => disconnect, []);
+
+  useEffect(() => {
+    if (!enabled) disconnect();
+  }, [enabled]);
+
+  if (!enabled) {
+    return (
+      <View style={[styles.disabled, compact && styles.compactBox]}>
+        <Text style={styles.disabledText}>Voice disabled</Text>
+      </View>
+    );
+  }
 
   if (!livekit?.configured || !livekit.url || !livekit.token) {
     return (
@@ -153,7 +165,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
         onPress={connected ? unlockAudio : connect}
         activeOpacity={0.75}
       >
-        <MaterialCommunityIcons name={connected ? 'volume-high' : 'microphone'} size={16} color="#fff" />
+        <Text style={styles.symbolText}>{connected ? 'ON' : 'MIC'}</Text>
         <Text style={styles.buttonText}>{connected ? 'On' : status === 'connecting' ? '...' : 'Join'}</Text>
       </TouchableOpacity>
       {connected && (
@@ -162,7 +174,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
           onPress={toggleMute}
           activeOpacity={0.75}
         >
-          <MaterialCommunityIcons name={muted ? 'microphone-off' : 'microphone'} size={17} color={muted ? '#facc15' : '#f8fafc'} />
+          <Text style={[styles.iconText, muted && styles.mutedIconText]}>{muted ? 'OFF' : 'MIC'}</Text>
           <Text style={styles.srText}>{muted ? 'Unmute' : 'Mute'}</Text>
         </TouchableOpacity>
       )}
@@ -172,7 +184,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({ livekit, compact =
           onPress={disconnect}
           activeOpacity={0.75}
         >
-          <MaterialCommunityIcons name="phone-hangup" size={17} color="#fff" />
+          <Text style={styles.leaveIconText}>X</Text>
           <Text style={styles.srText}>Leave</Text>
         </TouchableOpacity>
       )}
@@ -193,7 +205,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   compactContainer: {
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
   },
   audioHost: {
     width: 0,
@@ -204,15 +216,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#1f2933',
+    backgroundColor: '#172233',
     borderRadius: 12,
-    paddingHorizontal: 11,
+    paddingHorizontal: 10,
     paddingVertical: 8,
     borderWidth: 1,
     borderColor: '#334155',
   },
   buttonConnected: {
-    backgroundColor: '#2f8d46',
+    backgroundColor: '#16C75A',
     borderColor: '#5fd36f',
   },
   buttonText: {
@@ -222,7 +234,7 @@ const styles = StyleSheet.create({
   },
   roundIconButton: {
     backgroundColor: '#111820',
-    width: 36,
+    minWidth: 44,
     height: 36,
     borderRadius: 12,
     borderWidth: 1,
@@ -235,11 +247,25 @@ const styles = StyleSheet.create({
   },
   leaveButton: {
     borderColor: '#e55c5c',
+    backgroundColor: '#3A1015',
   },
-  iconButtonText: {
-    color: '#f8fafc',
-    fontSize: 11,
-    fontWeight: '800',
+  symbolText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  iconText: {
+    color: '#F8FAFC',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  mutedIconText: {
+    color: '#FACC15',
+  },
+  leaveIconText: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '900',
   },
   srText: {
     display: 'none',

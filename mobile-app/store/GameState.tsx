@@ -5,6 +5,8 @@ import { trackEvent } from '@/utils/analytics';
 interface Stats {
   gamesPlayed: number;
   wins: number;
+  hintGames: number;
+  hintWins: number;
   currentStreak: number;
   maxStreak: number;
   guessDistribution: number[];
@@ -15,6 +17,8 @@ export interface DifficultyStats {
   gamesPlayed: number;
   wins: number;
   losses: number;
+  hintGames: number;
+  hintWins: number;
   currentStreak: number;
   maxStreak: number;
   guessDistribution: number[];
@@ -50,9 +54,22 @@ export interface BoardState {
   game_over: boolean;
   won: boolean;
   answer?: string | null;
+  answer_info?: AnswerInfo | null;
+  hints_used?: number;
+  hints?: { level: number; text: string }[];
   typing_player_id?: string | null;
   typing_player_name?: string | null;
   typing_player_emoji?: string | null;
+}
+
+export interface AnswerInfo {
+  word: string;
+  definition: string;
+  part_of_speech: string;
+  category_hint: string;
+  riddle_hint: string;
+  structure_hint: string;
+  example: string;
 }
 
 export interface ShareRequestState {
@@ -117,6 +134,7 @@ interface GameStateContextType {
   invalidShake: number;
   lastSubmittedRow: number;
   answer: string | null;
+  answerInfo: AnswerInfo | null;
   maxGuesses: number;
   toast: Toast | null;
 }
@@ -124,6 +142,8 @@ interface GameStateContextType {
 const defaultStats: Stats = {
   gamesPlayed: 0,
   wins: 0,
+  hintGames: 0,
+  hintWins: 0,
   currentStreak: 0,
   maxStreak: 0,
   guessDistribution: [0, 0, 0, 0, 0, 0],
@@ -164,6 +184,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [invalidShake, setInvalidShake] = useState(0);
   const [lastSubmittedRow, setLastSubmittedRow] = useState(-1);
   const [answer, setAnswer] = useState<string | null>(null);
+  const [answerInfo, setAnswerInfo] = useState<AnswerInfo | null>(null);
   const [toast, setToastState] = useState<Toast | null>(null);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -235,6 +256,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     gamesPlayed: 0,
     wins: 0,
     losses: 0,
+    hintGames: 0,
+    hintWins: 0,
     currentStreak: 0,
     maxStreak: 0,
     guessDistribution: [0, 0, 0, 0, 0, 0],
@@ -243,6 +266,8 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const normalizeStats = (raw: any): Stats => ({
     gamesPlayed: raw?.gamesPlayed ?? 0,
     wins: raw?.wins ?? 0,
+    hintGames: raw?.hintGames ?? 0,
+    hintWins: raw?.hintWins ?? 0,
     currentStreak: raw?.currentStreak ?? 0,
     maxStreak: raw?.maxStreak ?? 0,
     guessDistribution: Array.isArray(raw?.guessDistribution) ? raw.guessDistribution : [0, 0, 0, 0, 0, 0],
@@ -255,7 +280,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     await AsyncStorage.setItem('word_unlimited_stats', JSON.stringify(normalized));
   };
 
-  const buildUpdatedStats = (didWin: boolean, guessCount: number) => {
+  const buildUpdatedStats = (didWin: boolean, guessCount: number, usedHints = hintsUsed > 0) => {
     const nextStats = normalizeStats(stats);
     const diffStats = { ...emptyDifficultyStats(), ...(nextStats.byDifficulty[difficulty] ?? {}) };
     const overallGuessDistribution = [...nextStats.guessDistribution];
@@ -263,6 +288,10 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     nextStats.gamesPlayed += 1;
     diffStats.gamesPlayed += 1;
+    if (usedHints) {
+      nextStats.hintGames += 1;
+      diffStats.hintGames += 1;
+    }
 
     if (didWin) {
       overallGuessDistribution[guessCount - 1] = (overallGuessDistribution[guessCount - 1] ?? 0) + 1;
@@ -270,9 +299,11 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const overallStreak = nextStats.currentStreak + 1;
       const diffStreak = diffStats.currentStreak + 1;
       nextStats.wins += 1;
+      if (usedHints) nextStats.hintWins += 1;
       nextStats.currentStreak = overallStreak;
       nextStats.maxStreak = Math.max(nextStats.maxStreak, overallStreak);
       diffStats.wins += 1;
+      if (usedHints) diffStats.hintWins += 1;
       diffStats.currentStreak = diffStreak;
       diffStats.maxStreak = Math.max(diffStats.maxStreak, diffStreak);
     } else {
@@ -308,6 +339,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setInvalidShake(0);
     setLastSubmittedRow(-1);
     setAnswer(null);
+    setAnswerInfo(null);
     setTypingPlayerName(null);
     setTypingPlayerEmoji(null);
     setToastState(null);
@@ -387,6 +419,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setLetterStates(buildLetterStates(board.guesses ?? [], board.results ?? [], board.difficulty));
     setGameStatus(board.won ? 'won' : board.game_over ? 'lost' : 'playing');
     setAnswer(board.answer ?? null);
+    setAnswerInfo(board.answer_info ?? null);
+    setHintsUsed(board.hints_used ?? 0);
+    if (board.hints) setHints(board.hints);
   };
 
   const applyRoomState = (data: any, currentPlayerId = playerId) => {
@@ -417,6 +452,9 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       game_over: data.game_over,
       won: data.won,
       answer: data.answer,
+      answer_info: data.answer_info,
+      hints_used: data.hints_used ?? 0,
+      hints: data.hints ?? [],
     });
   };
 
@@ -640,12 +678,20 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [roomId, playerId]);
 
   const getHint = async (level: number) => {
-    if (hintsUsed >= 2 || !sessionId) return;
+    if (hintsUsed >= 2 || !sessionId) {
+      showToast('No hints left for this puzzle', 'warning');
+      return;
+    }
     try {
       const res = await fetch(`${API_URL}/hint?session_id=${sessionId}&level=${level}`);
+      if (res.status === 409) {
+        showToast('No hints left for this puzzle', 'warning');
+        return;
+      }
+      if (!res.ok) throw new Error('hint');
       const data = await res.json();
-      setHints(prev => [...prev, { level, text: data.hint }]);
-      setHintsUsed(prev => prev + 1);
+      setHints(prev => [...prev, { level: data.level ?? level, text: data.hint }]);
+      setHintsUsed(data.hints_used ?? level);
     } catch {
       showToast('Could not load hint', 'warning');
     }
@@ -811,13 +857,18 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       setTimeout(() => {
         if (data.won) {
+          setAnswer(data.answer);
+          setAnswerInfo(data.answer_info ?? null);
+          setHintsUsed(data.hints_used ?? hintsUsed);
           setGameStatus('won');
-          saveAndSetStats(buildUpdatedStats(true, newGuesses.length));
+          saveAndSetStats(buildUpdatedStats(true, newGuesses.length, (data.hints_used ?? hintsUsed) > 0));
           trackEvent('Game Won', { mode: 'solo', difficulty, guesses: newGuesses.length });
         } else if (data.game_over) {
           setAnswer(data.answer);
+          setAnswerInfo(data.answer_info ?? null);
+          setHintsUsed(data.hints_used ?? hintsUsed);
           setGameStatus('lost');
-          saveAndSetStats(buildUpdatedStats(false, newGuesses.length));
+          saveAndSetStats(buildUpdatedStats(false, newGuesses.length, (data.hints_used ?? hintsUsed) > 0));
           trackEvent('Game Lost', { mode: 'solo', difficulty, guesses: newGuesses.length });
         }
       }, 1600);
@@ -840,7 +891,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       startGame, createRoom, joinRoom, leaveRoom, createSharedGame, createIndividualGame,
       changeRoomDifficulty, setActiveBoard, requestShareBoard, respondToShareRequest, sendChatMessage, addLetter, removeLetter,
       submitGuess, getHint, hints, hintsUsed, invalidShake, lastSubmittedRow,
-      answer, maxGuesses, toast,
+      answer, answerInfo, maxGuesses, toast,
     }}>
       {children}
     </GameStateContext.Provider>

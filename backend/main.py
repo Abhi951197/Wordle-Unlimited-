@@ -10,6 +10,7 @@ import string
 import random
 
 from words import get_word, VALID_GUESSES
+from word_metadata import get_word_metadata, validate_metadata_coverage
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -40,6 +41,10 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 
+missing_metadata = validate_metadata_coverage()
+if missing_metadata and os.getenv("RENDER") != "true":
+    raise RuntimeError(f"Missing word metadata for {len(missing_metadata)} answers")
+
 class GameCreateResponse(BaseModel):
     session_id: str
     length: int
@@ -53,6 +58,8 @@ class GuessResponse(BaseModel):
     game_over: bool
     won: bool
     answer: str | None = None
+    answer_info: dict[str, str] | None = None
+    hints_used: int = 0
 
 class PlayerRequest(BaseModel):
     player_name: str = "Player"
@@ -124,6 +131,9 @@ class BoardState(BaseModel):
     game_over: bool
     won: bool
     answer: str | None = None
+    answer_info: dict[str, str] | None = None
+    hints_used: int = 0
+    hints: list[dict[str, Any]] = []
     typing_player_id: str | None = None
     typing_player_name: str | None = None
     typing_player_emoji: str | None = None
@@ -146,6 +156,9 @@ class RoomStateResponse(BaseModel):
     game_over: bool
     won: bool
     answer: str | None = None
+    answer_info: dict[str, str] | None = None
+    hints_used: int = 0
+    hints: list[dict[str, Any]] = []
     players: list[RoomPlayer]
     livekit: LiveKitInfo | None = None
     host_player_id: str | None = None
@@ -161,6 +174,12 @@ class RoomStateResponse(BaseModel):
 
 class RoomJoinResponse(RoomStateResponse):
     player_id: str
+
+class HintResponse(BaseModel):
+    hint: str
+    level: int
+    hints_used: int
+    max_hints: int = 2
 
 @app.get("/")
 def read_root():
@@ -228,6 +247,9 @@ def _create_session(difficulty: str) -> str:
         "results": [],
         "current_guess": "",
         "input_version": 0,
+        "hints_used": 0,
+        "hints": [],
+        "hint_assisted": False,
         "game_over": False,
         "won": False,
         "typing_player_id": None,
@@ -235,6 +257,11 @@ def _create_session(difficulty: str) -> str:
         "typing_player_emoji": None,
     }
     return session_id
+
+def _answer_info_for_session(session: dict[str, Any]) -> dict[str, str] | None:
+    if not session.get("game_over"):
+        return None
+    return get_word_metadata(session.get("word"))
 
 def _board_state(session_id: str | None) -> BoardState | None:
     if not session_id or session_id not in sessions:
@@ -251,7 +278,10 @@ def _board_state(session_id: str | None) -> BoardState | None:
         input_version=session.get("input_version", 0),
         game_over=session["game_over"],
         won=session["won"],
-        answer=session["word"] if session["game_over"] and not session["won"] else None,
+        answer=session["word"] if session["game_over"] else None,
+        answer_info=_answer_info_for_session(session),
+        hints_used=session.get("hints_used", 0),
+        hints=session.get("hints", []),
         typing_player_id=session.get("typing_player_id"),
         typing_player_name=session.get("typing_player_name"),
         typing_player_emoji=session.get("typing_player_emoji"),
@@ -319,7 +349,10 @@ def _room_state(room_id: str, player_id: str | None = None) -> RoomStateResponse
         input_version=session.get("input_version", 0),
         game_over=session["game_over"],
         won=session["won"],
-        answer=session["word"] if session["game_over"] and not session["won"] else None,
+        answer=session["word"] if session["game_over"] else None,
+        answer_info=_answer_info_for_session(session),
+        hints_used=session.get("hints_used", 0),
+        hints=session.get("hints", []),
         players=list(room["players"].values()),
         livekit=livekit,
         host_player_id=room.get("host_player_id"),
@@ -390,7 +423,9 @@ def _submit_guess_to_session(session_id: str, guess: str) -> GuessResponse:
         states=states,
         game_over=game_over,
         won=won,
-        answer=target_word if (game_over and not won) else None,
+        answer=target_word if game_over else None,
+        answer_info=get_word_metadata(target_word) if game_over else None,
+        hints_used=session.get("hints_used", 0),
     )
 
 @app.get("/word", response_model=GameCreateResponse)
@@ -609,19 +644,27 @@ def send_room_chat(room_id: str, req: RoomChatRequest):
     _touch_room(room, req.player_id)
     return _room_state(room_id, req.player_id)
 
-from hints import WORD_HINTS
-
-@app.get("/hint")
+@app.get("/hint", response_model=HintResponse)
 def get_hint(session_id: str, level: int = 1):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-        
-    word = sessions[session_id]["word"]
-    hints = WORD_HINTS.get(word, {})
-    
+
+    if level not in {1, 2}:
+        raise HTTPException(status_code=400, detail="Only two hints are available")
+
+    session = sessions[session_id]
+    if session.get("game_over"):
+        raise HTTPException(status_code=409, detail="Puzzle already finished")
+    if session.get("hints_used", 0) >= 2:
+        raise HTTPException(status_code=409, detail="No hints left")
+
+    info = get_word_metadata(session["word"]) or {}
     if level == 1:
-        return {"hint": hints.get("category", "No category hint available")}
-    elif level == 2:
-        return {"hint": hints.get("riddle", "No riddle available")}
+        hint = info.get("category_hint") or info.get("definition") or "English vocabulary"
     else:
-        return {"hint": hints.get("structure", "No structural hint available")}
+        hint = info.get("riddle_hint") or info.get("structure_hint") or "Think about the word shape."
+
+    session["hints_used"] = session.get("hints_used", 0) + 1
+    session["hint_assisted"] = True
+    session.setdefault("hints", []).append({"level": level, "text": hint})
+    return HintResponse(hint=hint, level=level, hints_used=session["hints_used"])

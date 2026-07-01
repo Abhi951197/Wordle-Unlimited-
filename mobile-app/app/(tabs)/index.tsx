@@ -20,7 +20,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { ActiveBoard, ChatMessage, useGameState } from '@/store/GameState';
+import { ActiveBoard, AnswerInfo, ChatMessage, useGameState } from '@/store/GameState';
 import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
@@ -88,7 +88,8 @@ export default function GameScreen() {
     setActiveBoard, requestShareBoard, respondToShareRequest, gameStatus, currentGuess,
     addLetter, removeLetter, submitGuess, guesses, results, wordLength, letterStates,
     sessionId, difficulty, roomId, playerId, playerEmoji, roomPlayers, maxRoomPlayers, typingPlayerName, typingPlayerEmoji, livekit, activeBoard,
-    shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, maxGuesses, toast,
+    shareRequest, chatMessages, sendChatMessage, stats, invalidShake, lastSubmittedRow, answer, answerInfo, maxGuesses, toast,
+    getHint, hints, hintsUsed,
   } = useGameState();
 
   const { width, height } = useWindowDimensions();
@@ -490,6 +491,22 @@ export default function GameScreen() {
   const renderBoard = () => (
     <View style={styles.boardShell}>
       <View style={styles.toastSlot}>{toast ? <ToastBanner message={toast.message} type={toast.type} /> : null}</View>
+      {gameStatus === 'playing' && (
+        <View style={styles.hintBar}>
+          <TouchableOpacity
+            style={[styles.hintButton, hintsUsed >= 2 && styles.hintButtonDisabled]}
+            onPress={() => getHint(hintsUsed + 1)}
+            disabled={hintsUsed >= 2}
+          >
+            <Text style={styles.hintButtonText}>Hint {Math.min(hintsUsed + 1, 2)}/2</Text>
+          </TouchableOpacity>
+          {hints.length > 0 && (
+            <Text style={styles.hintInlineText} numberOfLines={1} ellipsizeMode="tail">
+              {hints[hints.length - 1].text}
+            </Text>
+          )}
+        </View>
+      )}
       {roomId && (
         <View style={styles.segment}>
           <TouchableOpacity style={[styles.segmentBtn, activeBoard === 'shared' && styles.segmentActive]} onPress={() => switchBoard('shared')}>
@@ -871,7 +888,9 @@ export default function GameScreen() {
           <View style={styles.resultCard}>
             <View style={styles.logoMarkSmall}><Text style={styles.logoMarkText}>W</Text></View>
             <Text style={[styles.resultTitle, gameStatus === 'won' ? styles.win : styles.loss]}>{gameStatus === 'won' ? 'You Win!' : 'Game Over'}</Text>
-            {gameStatus === 'lost' && answer && <Text style={styles.answerText}>The word was {answer}</Text>}
+            {answer && <Text style={styles.answerText}>{gameStatus === 'won' ? `The word was ${answer}` : `The word was ${answer}`}</Text>}
+            {hintsUsed > 0 && <Text style={styles.hintAssistedText}>Hint-assisted</Text>}
+            {answerInfo && <AnswerMeaningCard info={answerInfo} />}
             <StatsSummary stats={stats} activeTab="overall" gameStatus={gameStatus} guesses={guesses} compact />
             {roomId ? (
               <>
@@ -892,6 +911,15 @@ const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
   <View style={styles.infoRow}>
     <Text style={styles.infoLabel}>{label}</Text>
     <Text style={styles.infoValue}>{value}</Text>
+  </View>
+);
+
+const AnswerMeaningCard: React.FC<{ info: AnswerInfo }> = ({ info }) => (
+  <View style={styles.meaningCard}>
+    <Text style={styles.meaningWord}>{info.word}</Text>
+    {!!info.part_of_speech && <Text style={styles.meaningPos}>{info.part_of_speech}</Text>}
+    <Text style={styles.meaningDefinition}>{info.definition}</Text>
+    {!!info.example && <Text style={styles.meaningExample}>{info.example}</Text>}
   </View>
 );
 
@@ -1104,6 +1132,11 @@ const styles = StyleSheet.create({
   toast: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
   toastText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   warningToastText: { color: '#111827' },
+  hintBar: { width: '100%', maxWidth: 420, minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  hintButton: { minHeight: 34, borderRadius: 12, backgroundColor: '#2A2108', borderWidth: 1, borderColor: '#FACC15', paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  hintButtonDisabled: { opacity: 0.5 },
+  hintButtonText: { color: '#FDE68A', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  hintInlineText: { flex: 1, color: '#FDE68A', fontSize: 11, fontWeight: '800' },
   segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 8, zIndex: 4 },
   segmentBtn: { paddingVertical: 7, paddingHorizontal: 18, borderRadius: 11 },
   segmentActive: { backgroundColor: '#16C75A' },
@@ -1204,6 +1237,12 @@ const styles = StyleSheet.create({
   win: { color: '#FACC15' },
   loss: { color: '#EF4444' },
   answerText: { color: '#F8FAFC', textAlign: 'center', fontSize: 16, fontWeight: '800' },
+  hintAssistedText: { color: '#FDE68A', textAlign: 'center', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  meaningCard: { borderRadius: 16, borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', padding: 14, gap: 5 },
+  meaningWord: { color: '#F8FAFC', fontSize: 18, fontWeight: '900', textTransform: 'uppercase', textAlign: 'center' },
+  meaningPos: { color: '#16C75A', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', textAlign: 'center' },
+  meaningDefinition: { color: '#D1D5DB', fontSize: 13, lineHeight: 18, fontWeight: '800', textAlign: 'center' },
+  meaningExample: { color: '#9CA3AF', fontSize: 12, lineHeight: 17, fontWeight: '700', textAlign: 'center', fontStyle: 'italic' },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   statsTabs: { flexDirection: 'row', gap: 4, marginBottom: 14 },
   statsTab: { flex: 1, minHeight: 30, borderRadius: 10, borderWidth: 1, borderColor: '#283447', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },

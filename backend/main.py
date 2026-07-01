@@ -180,6 +180,9 @@ class HintResponse(BaseModel):
     level: int
     hints_used: int
     max_hints: int = 2
+    kind: str
+    revealed_position: int | None = None
+    revealed_letter: str | None = None
 
 @app.get("/")
 def read_root():
@@ -262,6 +265,69 @@ def _answer_info_for_session(session: dict[str, Any]) -> dict[str, str] | None:
     if not session.get("game_over"):
         return None
     return get_word_metadata(session.get("word"))
+
+def _ordinal(value: int) -> str:
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
+
+def _plain_definition(text: str) -> str:
+    source = text or ""
+    first_clause = source.split(";", 1)[0].strip()
+    if len(first_clause) >= 18:
+        source = first_clause
+    cleaned = " ".join(source.split())
+    return cleaned.rstrip(".")
+
+def _human_meaning_hint(word: str, info: dict[str, str]) -> str:
+    definition = _plain_definition(info.get("definition", ""))
+    part_of_speech = (info.get("part_of_speech") or "word").lower()
+    weak_definition = "valid english word used in wordle-style puzzles" in definition.lower()
+
+    if not definition or weak_definition:
+        return f"A valid word. {info.get('structure_hint') or _word_shape_hint(word)}"
+
+    lower = definition[:1].lower() + definition[1:]
+    if part_of_speech == "verb":
+        return f"An action meaning: {lower}."
+    if part_of_speech == "adjective":
+        return f"Describes something as: {lower}."
+    if lower.startswith(("a ", "an ", "the ", "any ")):
+        return f"Think of {lower}."
+    if lower.endswith("s") and " " in lower:
+        return f"Something that {lower}."
+    return f"Think of something related to: {lower}."
+
+def _word_shape_hint(word: str) -> str:
+    vowels = sum(1 for ch in word if ch in "AEIOU")
+    repeated = len(set(word)) != len(word)
+    repeated_text = "has a repeated letter" if repeated else "has no repeated letters"
+    return f"It has {vowels} vowel{'s' if vowels != 1 else ''} and {repeated_text}."
+
+def _letter_hint_for_session(session: dict[str, Any]) -> dict[str, Any]:
+    word = session["word"]
+    solved_positions = {
+        index
+        for result in session.get("results", [])
+        for index, state in enumerate(result)
+        if state == "correct"
+    }
+    available_positions = [index for index in range(len(word)) if index not in solved_positions]
+    if not available_positions:
+        hint = get_word_metadata(word).get("structure_hint") or _word_shape_hint(word)
+        return {"hint": hint, "kind": "structure"}
+
+    position = available_positions[len(available_positions) // 2]
+    letter = word[position]
+    one_based = position + 1
+    return {
+        "hint": f"The {_ordinal(one_based)} letter is {letter}.",
+        "kind": "letter",
+        "revealed_position": one_based,
+        "revealed_letter": letter,
+    }
 
 def _board_state(session_id: str | None) -> BoardState | None:
     if not session_id or session_id not in sessions:
@@ -660,11 +726,22 @@ def get_hint(session_id: str, level: int = 1):
 
     info = get_word_metadata(session["word"]) or {}
     if level == 1:
-        hint = info.get("category_hint") or info.get("definition") or "English vocabulary"
+        payload = {
+            "hint": _human_meaning_hint(session["word"], info),
+            "kind": "meaning",
+        }
     else:
-        hint = info.get("riddle_hint") or info.get("structure_hint") or "Think about the word shape."
+        payload = _letter_hint_for_session(session)
 
     session["hints_used"] = session.get("hints_used", 0) + 1
     session["hint_assisted"] = True
-    session.setdefault("hints", []).append({"level": level, "text": hint})
-    return HintResponse(hint=hint, level=level, hints_used=session["hints_used"])
+    hint_entry = {"level": level, "text": payload["hint"], **payload}
+    session.setdefault("hints", []).append(hint_entry)
+    return HintResponse(
+        hint=payload["hint"],
+        level=level,
+        hints_used=session["hints_used"],
+        kind=payload["kind"],
+        revealed_position=payload.get("revealed_position"),
+        revealed_letter=payload.get("revealed_letter"),
+    )

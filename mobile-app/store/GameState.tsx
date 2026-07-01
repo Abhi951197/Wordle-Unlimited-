@@ -56,10 +56,18 @@ export interface BoardState {
   answer?: string | null;
   answer_info?: AnswerInfo | null;
   hints_used?: number;
-  hints?: { level: number; text: string }[];
+  hints?: HintState[];
   typing_player_id?: string | null;
   typing_player_name?: string | null;
   typing_player_emoji?: string | null;
+}
+
+export interface HintState {
+  level: number;
+  text: string;
+  kind?: 'meaning' | 'letter' | 'structure';
+  revealed_position?: number | null;
+  revealed_letter?: string | null;
 }
 
 export interface AnswerInfo {
@@ -129,7 +137,7 @@ interface GameStateContextType {
   removeLetter: () => void;
   submitGuess: () => Promise<void>;
   getHint: (level: number) => Promise<void>;
-  hints: { level: number; text: string }[];
+  hints: HintState[];
   hintsUsed: number;
   invalidShake: number;
   lastSubmittedRow: number;
@@ -179,7 +187,7 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [gameStatus, setGameStatus] = useState<'playing' | 'won' | 'lost'>('playing');
   const [letterStates, setLetterStates] = useState<Record<string, any>>({});
   const [stats, setStats] = useState<Stats>(defaultStats);
-  const [hints, setHints] = useState<{ level: number; text: string }[]>([]);
+  const [hints, setHints] = useState<HintState[]>([]);
   const [hintsUsed, setHintsUsed] = useState(0);
   const [invalidShake, setInvalidShake] = useState(0);
   const [lastSubmittedRow, setLastSubmittedRow] = useState(-1);
@@ -690,7 +698,13 @@ export const GameStateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
       if (!res.ok) throw new Error('hint');
       const data = await res.json();
-      setHints(prev => [...prev, { level: data.level ?? level, text: data.hint }]);
+      setHints(prev => [...prev, {
+        level: data.level ?? level,
+        text: data.hint,
+        kind: data.kind,
+        revealed_position: data.revealed_position,
+        revealed_letter: data.revealed_letter,
+      }]);
       setHintsUsed(data.hints_used ?? level);
     } catch {
       showToast('Could not load hint', 'warning');

@@ -20,7 +20,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Keyboard } from '@/components/Keyboard';
 import { VoiceControls } from '@/components/VoiceControls';
 import { WordGrid } from '@/components/WordGrid';
-import { ActiveBoard, AnswerInfo, ChatMessage, useGameState } from '@/store/GameState';
+import { ActiveBoard, AnswerInfo, ChatMessage, HintState, useGameState } from '@/store/GameState';
 import { trackEvent } from '@/utils/analytics';
 
 const DIFF_META: Record<string, { color: string; label: string; desc: string; guesses: string; mark: string }> = {
@@ -501,9 +501,7 @@ export default function GameScreen() {
             <Text style={styles.hintButtonText}>Hint {Math.min(hintsUsed + 1, 2)}/2</Text>
           </TouchableOpacity>
           {hints.length > 0 && (
-            <Text style={styles.hintInlineText} numberOfLines={1} ellipsizeMode="tail">
-              {hints[hints.length - 1].text}
-            </Text>
+            <HintPreview hint={hints[hints.length - 1]} />
           )}
         </View>
       )}
@@ -923,6 +921,29 @@ const AnswerMeaningCard: React.FC<{ info: AnswerInfo }> = ({ info }) => (
   </View>
 );
 
+const HintPreview: React.FC<{ hint: HintState }> = ({ hint }) => {
+  if (hint.kind === 'letter' && hint.revealed_position && hint.revealed_letter) {
+    return (
+      <View style={styles.hintLetterPill}>
+        <Text style={styles.hintLetterLabel}>{ordinal(hint.revealed_position)} letter</Text>
+        <Text style={styles.hintLetterValue}>{hint.revealed_letter}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <Text style={styles.hintInlineText} numberOfLines={1} ellipsizeMode="tail">
+      {hint.text}
+    </Text>
+  );
+};
+
+const ordinal = (value: number) => {
+  if (value % 100 >= 10 && value % 100 <= 20) return `${value}th`;
+  const suffix = value % 10 === 1 ? 'st' : value % 10 === 2 ? 'nd' : value % 10 === 3 ? 'rd' : 'th';
+  return `${value}${suffix}`;
+};
+
 const ChatBubble: React.FC<{ message: ChatMessage; mine: boolean }> = ({ message, mine }) => (
   <View style={[styles.chatBubble, mine && styles.chatBubbleMine]}>
     <Text style={styles.chatAuthor}>{message.player_emoji || '🙂'} {message.player_name}</Text>
@@ -1137,6 +1158,9 @@ const styles = StyleSheet.create({
   hintButtonDisabled: { opacity: 0.5 },
   hintButtonText: { color: '#FDE68A', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   hintInlineText: { flex: 1, color: '#FDE68A', fontSize: 11, fontWeight: '800' },
+  hintLetterPill: { flex: 1, minHeight: 34, borderRadius: 12, backgroundColor: '#14331F', borderWidth: 1, borderColor: '#16C75A', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  hintLetterLabel: { color: '#BBF7D0', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  hintLetterValue: { minWidth: 28, textAlign: 'center', color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
   segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 8, zIndex: 4 },
   segmentBtn: { paddingVertical: 7, paddingHorizontal: 18, borderRadius: 11 },
   segmentActive: { backgroundColor: '#16C75A' },

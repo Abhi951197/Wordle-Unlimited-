@@ -106,6 +106,7 @@ export default function GameScreen() {
   const [settingsModal, setSettingsModal] = useState(false);
   const [emojiModal, setEmojiModal] = useState(false);
   const [chatModal, setChatModal] = useState(false);
+  const [hintModal, setHintModal] = useState(false);
   const [seenChatId, setSeenChatId] = useState<string | null>(null);
   const [chatPopupVisible, setChatPopupVisible] = useState(false);
   const [roomName, setRoomName] = useState('');
@@ -501,7 +502,9 @@ export default function GameScreen() {
             <Text style={styles.hintButtonText}>Hint {Math.min(hintsUsed + 1, 2)}/2</Text>
           </TouchableOpacity>
           {hints.length > 0 && (
-            <HintPreview hint={hints[hints.length - 1]} />
+            <TouchableOpacity style={styles.hintTrayButton} onPress={() => setHintModal(true)} activeOpacity={0.86}>
+              {hints.map((hint) => <HintPreview key={`${hint.level}-${hint.text}`} hint={hint} compact />)}
+            </TouchableOpacity>
           )}
         </View>
       )}
@@ -881,6 +884,21 @@ export default function GameScreen() {
         </View>
       </Modal>
 
+      <Modal visible={hintModal} transparent animationType="slide" onRequestClose={() => setHintModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setHintModal(false)}><View style={styles.modalBackdrop} /></TouchableWithoutFeedback>
+        <View style={[styles.sheet, themed.card]}>
+          <View style={styles.sheetHeader}>
+            <Text style={[styles.sheetTitle, themed.titleText]}>Puzzle Clues</Text>
+            <TouchableOpacity style={[styles.closeIconBtn, themed.iconBtn]} onPress={() => setHintModal(false)}>
+              <IconMark name="x" color={palette.text} />
+            </TouchableOpacity>
+          </View>
+          {hints.length ? hints.map((hint) => <HintFullCard key={`${hint.level}-${hint.text}`} hint={hint} />) : (
+            <Text style={[styles.hintEmptyText, themed.bodyText]}>No clues revealed yet.</Text>
+          )}
+        </View>
+      </Modal>
+
       {showResultOverlay && gameStatus !== 'playing' && (view === 'solo' || (view === 'party' && roomId)) && (
         <View style={styles.overlay}>
           <View style={styles.resultCard}>
@@ -921,10 +939,10 @@ const AnswerMeaningCard: React.FC<{ info: AnswerInfo }> = ({ info }) => (
   </View>
 );
 
-const HintPreview: React.FC<{ hint: HintState }> = ({ hint }) => {
+const HintPreview: React.FC<{ hint: HintState; compact?: boolean }> = ({ hint, compact = false }) => {
   if (hint.kind === 'letter' && hint.revealed_position && hint.revealed_letter) {
     return (
-      <View style={styles.hintLetterPill}>
+      <View style={[styles.hintLetterPill, compact && styles.hintPreviewChip]}>
         <Text style={styles.hintLetterLabel}>{ordinal(hint.revealed_position)} letter</Text>
         <Text style={styles.hintLetterValue}>{hint.revealed_letter}</Text>
       </View>
@@ -932,11 +950,28 @@ const HintPreview: React.FC<{ hint: HintState }> = ({ hint }) => {
   }
 
   return (
-    <Text style={styles.hintInlineText} numberOfLines={1} ellipsizeMode="tail">
-      {hint.text}
-    </Text>
+    <View style={[styles.hintTextChip, compact && styles.hintPreviewChip]}>
+      <Text style={styles.hintChipKicker}>Hint {hint.level}</Text>
+      <Text style={styles.hintInlineText} numberOfLines={1} ellipsizeMode="tail">
+        {hint.text}
+      </Text>
+    </View>
   );
 };
+
+const HintFullCard: React.FC<{ hint: HintState }> = ({ hint }) => (
+  <View style={styles.hintFullCard}>
+    <View style={styles.hintFullHeader}>
+      <Text style={styles.hintFullKicker}>Hint {hint.level}</Text>
+      {hint.kind === 'letter' && hint.revealed_position && hint.revealed_letter ? (
+        <View style={styles.hintFullLetterBadge}>
+          <Text style={styles.hintFullLetterBadgeText}>{ordinal(hint.revealed_position)}: {hint.revealed_letter}</Text>
+        </View>
+      ) : null}
+    </View>
+    <Text style={styles.hintFullText}>{hint.text}</Text>
+  </View>
+);
 
 const ordinal = (value: number) => {
   if (value % 100 >= 10 && value % 100 <= 20) return `${value}th`;
@@ -1157,10 +1192,21 @@ const styles = StyleSheet.create({
   hintButton: { minHeight: 34, borderRadius: 12, backgroundColor: '#2A2108', borderWidth: 1, borderColor: '#FACC15', paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
   hintButtonDisabled: { opacity: 0.5 },
   hintButtonText: { color: '#FDE68A', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
-  hintInlineText: { flex: 1, color: '#FDE68A', fontSize: 11, fontWeight: '800' },
-  hintLetterPill: { flex: 1, minHeight: 34, borderRadius: 12, backgroundColor: '#14331F', borderWidth: 1, borderColor: '#16C75A', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  hintTrayButton: { flex: 1, minWidth: 0, minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  hintPreviewChip: { flex: 1, minWidth: 0 },
+  hintTextChip: { minHeight: 34, borderRadius: 12, backgroundColor: '#2A2108', borderWidth: 1, borderColor: '#B45309', paddingHorizontal: 10, justifyContent: 'center' },
+  hintChipKicker: { color: '#FACC15', fontSize: 8, fontWeight: '900', textTransform: 'uppercase' },
+  hintInlineText: { color: '#FDE68A', fontSize: 10, fontWeight: '800' },
+  hintLetterPill: { minHeight: 34, borderRadius: 12, backgroundColor: '#14331F', borderWidth: 1, borderColor: '#16C75A', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   hintLetterLabel: { color: '#BBF7D0', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
   hintLetterValue: { minWidth: 28, textAlign: 'center', color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
+  hintFullCard: { borderRadius: 16, borderWidth: 1, borderColor: '#B45309', backgroundColor: '#2A2108', padding: 14, gap: 8 },
+  hintFullHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  hintFullKicker: { color: '#FACC15', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  hintFullText: { color: '#FDE68A', fontSize: 14, lineHeight: 20, fontWeight: '800' },
+  hintFullLetterBadge: { borderRadius: 999, backgroundColor: '#14331F', borderWidth: 1, borderColor: '#16C75A', paddingHorizontal: 10, paddingVertical: 4 },
+  hintFullLetterBadgeText: { color: '#BBF7D0', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  hintEmptyText: { color: '#9CA3AF', fontSize: 13, fontWeight: '800', textAlign: 'center', paddingVertical: 8 },
   segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#283447', backgroundColor: '#111827', borderRadius: 14, padding: 3, marginBottom: 8, zIndex: 4 },
   segmentBtn: { paddingVertical: 7, paddingHorizontal: 18, borderRadius: 11 },
   segmentActive: { backgroundColor: '#16C75A' },
